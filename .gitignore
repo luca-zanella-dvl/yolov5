@@ -250,3 +250,5 @@ fabric.properties
 
 # Manually added
 experiments/
+datasets/
+raw/
