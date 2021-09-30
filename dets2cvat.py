@@ -3,6 +3,8 @@ import argparse
 import os
 import shutil
 
+COCO = "coco"
+CROWDHUMAN = "crowdhuman"
 COCO_CLASSES = {
     1: "person",
     2: "bicycle",
@@ -85,11 +87,16 @@ COCO_CLASSES = {
     79: "hair drier",
     80: "toothbrush",
 }
+CROWDHUMAN_CLASSES = {
+    1: "head",
+    2: "person",
+}
 
 
 def main(args):
     labels_path = args.labels_path
-    
+    dataset_type = args.dataset_type
+
     ann_files = [
         f
         for f in os.listdir(labels_path)
@@ -104,13 +111,20 @@ def main(args):
         Path(archive_path).mkdir(parents=True, exist_ok=True)
 
         with open(os.path.join(archive_path, "obj.data"), "w") as f:
-            f.write("classes = 80\n")
+            if dataset_type == COCO:
+                f.write("classes = 80\n")
+            elif dataset_type == CROWDHUMAN:
+                f.write("classes = 2\n")
             f.write("names = data/obj.names\n")
             f.write("train = data/train.txt")
 
         with open(os.path.join(archive_path, "obj.names"), "w") as f:
-            for value in COCO_CLASSES.values():
-                f.write(f"{value}\n")
+            if dataset_type == COCO:
+                for value in COCO_CLASSES.values():
+                    f.write(f"{value}\n")
+            elif dataset_type == CROWDHUMAN:
+                for value in CROWDHUMAN_CLASSES.values():
+                    f.write(f"{value}\n")
 
         data_path = os.path.join(archive_path, "obj_train_data")
         Path(data_path).mkdir(parents=True, exist_ok=True)
@@ -133,7 +147,13 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--labels_path", type=str, help="path to folder containing labels"
+        "--labels_path", type=str, help="path to folder containing yolo labels"
+    )
+    parser.add_argument(
+        "--dataset_type",
+        type=str,
+        default="coco",
+        help="type of dataset: coco, crowdhuman",
     )
     args = parser.parse_args()
     main(args)
