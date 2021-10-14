@@ -462,6 +462,7 @@ def check_dataset(data, autodownload=True):
         with open(data, errors='ignore') as f:
             data = yaml.safe_load(f)  # dictionary
 
+<<<<<<< HEAD
     # Checks
     for k in 'train', 'val', 'nc':
         assert k in data, emojis(f"data.yaml '{k}:' field missing ❌")
@@ -474,6 +475,12 @@ def check_dataset(data, autodownload=True):
     if not path.is_absolute():
         path = (ROOT / path).resolve()
     for k in 'train', 'val', 'test':
+=======
+    # Parse yaml
+    path = extract_dir or Path(data.get('path') or '')  # optional 'path' default to '.'
+    # for k in 'train', 'val', 'test':
+    for k in 'train', 'val', 'test', 'extra', 'pseudo':
+>>>>>>> Train using pseudolabels
         if data.get(k):  # prepend path
             data[k] = str(path / data[k]) if isinstance(data[k], str) else [str(path / x) for x in data[k]]
 
