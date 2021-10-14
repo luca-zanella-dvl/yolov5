@@ -25,12 +25,15 @@ from utils.general import check_img_size, check_requirements, check_imshow, colo
     apply_classifier, scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
 from utils.plots import Annotator, colors
 from utils.torch_utils import select_device, load_classifier, time_sync
+from utils.augmentations import letterbox
 
 
 @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
+        lpd_weights='weights/yolov5x_lpd.pt',
         source='data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
+        lpd_imgsz=640,
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
@@ -41,6 +44,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         save_crop=False,  # save cropped prediction boxes
         nosave=False,  # do not save images/videos
         classes=None,  # filter by class: --class 0, or --class 0 2 3
+        lpd_classes=None,
         agnostic_nms=False,  # class-agnostic NMS
         augment=False,  # augmented inference
         visualize=False,  # visualize features
@@ -107,6 +111,20 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
             int8 = input_details[0]['dtype'] == np.uint8  # is TFLite quantized uint8 model
     imgsz = check_img_size(imgsz, s=stride)  # check image size
     ascii = is_ascii(names)  # names are ascii (use PIL for UTF-8)
+
+    # Load lpd model
+    classify = False
+    lpd_model = attempt_load(lpd_weights, map_location=device)  # load FP32 model
+    lpd_stride = int(lpd_model.stride.max())  # model stride
+    lpd_names = lpd_model.module.names if hasattr(lpd_model, 'module') else lpd_model.names  # get class names
+    if half:
+        lpd_model.half()  # to FP16
+    if classify:  # second-stage classifier
+        lpd_modelc = load_classifier(name='resnet50', n=2)  # initialize
+        lpd_modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
+    lpd_imgsz = check_img_size(lpd_imgsz, s=lpd_stride)  # check image size
+    lpd_ascii = is_ascii(lpd_names)  # names are ascii (use PIL for UTF-8) 
+    vehicles = ['car', 'motorcycle', 'bus', 'truck']
 
     # Dataloader
     if webcam:
@@ -206,16 +224,64 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
                         annotator.box_label(xyxy, label, color=colors(c, True))
                         if save_crop:
-                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=False, save=False)
 
                     if anonymize:
+                        sub_im = None
+
                         bbox = torch.tensor(xyxy).view(1, 4).clone().view(-1).numpy().astype(np.int32)
-                        sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]
-                        sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                        im0[
-                            bbox[1] : bbox[1] + sub_im.shape[0],
-                            bbox[0] : bbox[0] + sub_im.shape[1],
-                        ] = sub_im
+
+                        c = int(cls)
+                        label = names[c]
+                        if label in vehicles:
+                            veh_bbox = torch.from_numpy(bbox).to(device)
+                            veh_im0 = im0[veh_bbox[1] : veh_bbox[3], veh_bbox[0] : veh_bbox[2]] 
+
+                            # Padded resize
+                            veh_img = letterbox(veh_im0, *lpd_imgsz, stride=lpd_stride, auto=True)[0]
+                            # Convert
+                            veh_img = veh_img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                            veh_img = np.ascontiguousarray(veh_img) 
+
+                            veh_img = torch.from_numpy(veh_img).to(device)
+                            veh_img = veh_img.half() if half else veh_img.float()  # uint8 to fp16/32
+                            veh_img = veh_img / 255.0  # 0 - 255 to 0.0 - 1.0
+                            if len(veh_img.shape) == 3:
+                                veh_img = veh_img[None]  # expand for batch dim
+
+                            # Inference
+                            visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+                            lpd_pred = lpd_model(veh_img, augment=augment, visualize=visualize)[0]
+
+                            # NMS
+                            lpd_pred = non_max_suppression(lpd_pred, conf_thres, iou_thres, lpd_classes, agnostic_nms, max_det=max_det)
+
+                            # Second-stage classifier (optional)
+                            if classify:
+                                lpd_pred = apply_classifier(lpd_pred, lpd_modelc, veh_img, veh_im0)
+
+                            # Process predictions
+                            for i, lpd_det in enumerate(lpd_pred):  # detections per image
+                                if len(lpd_det):
+                                    # Rescale boxes from veh_img_size to veh_im0 size
+                                    lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape).round()
+
+                                    for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
+                                        lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy().astype(np.int32)
+                                        sub_im = im0[bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2]]
+                                        sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                                        im0[
+                                            bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3],
+                                            bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2],
+                                        ] = sub_im
+
+                        elif label == 'person':
+                            sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]
+                            sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                            im0[
+                                bbox[1] : bbox[1] + sub_im.shape[0],
+                                bbox[0] : bbox[0] + sub_im.shape[1],
+                            ] = sub_im
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
@@ -258,8 +324,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
+    parser.add_argument('--lpd-weights', nargs='+', type=str, default='yolov5s.pt', help='lpd model.pt path(s)')
     parser.add_argument('--source', type=str, default='data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
+    parser.add_argument('--lpd-imgsz', '--lpd-img', '--lpd-img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
@@ -270,6 +338,7 @@ def parse_opt():
     parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
     parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
+    parser.add_argument('--lpd_classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--visualize', action='store_true', help='visualize features')
