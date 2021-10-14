@@ -63,9 +63,9 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = \
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, pseudo = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
-        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
+        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.pseudo
     callbacks.run('on_pretrain_routine_start')
 
     # Directories
@@ -105,7 +105,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
-    train_path, val_path, pseudo_path = data_dict['train'], data_dict['val'], data_dict['pseudo']
+    train_path, val_path = data_dict['train'], data_dict['val']
+    if pseudo:
+        pseudo_path = data_dict['pseudo']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
     assert len(names) == nc, f'{len(names)} names found for nc={nc} dataset in {data}'  # check
@@ -219,7 +221,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         LOGGER.info('Using SyncBatchNorm()')
 
     # Trainloader
-    if opt.pseudo:
+    if pseudo:
         print("Using train labels with pseudo labels")
         train_loader, dataset = added_pseudo_dataloader(train_path, pseudo_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                                       hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=LOCAL_RANK, 
