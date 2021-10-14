@@ -38,6 +38,7 @@ from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
 from utils.datasets import create_dataloader
+from utils.pdatasets import added_pseudo_dataloader
 from utils.general import labels_to_class_weights, increment_path, labels_to_image_weights, init_seeds, \
     strip_optimizer, get_latest_run, check_dataset, check_git_status, check_img_size, check_requirements, \
     check_file, check_yaml, check_suffix, print_args, print_mutation, set_logging, one_cycle, colorstr, methods
@@ -102,7 +103,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
-    train_path, val_path = data_dict['train'], data_dict['val']
+    train_path, val_path, pseudo_path = data_dict['train'], data_dict['val'], data_dict['pseudo']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
     assert len(names) == nc, f'{len(names)} names found for nc={nc} dataset in {data}'  # check
@@ -211,10 +212,17 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         LOGGER.info('Using SyncBatchNorm()')
 
     # Trainloader
-    train_loader, dataset = create_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
-                                              hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=LOCAL_RANK,
-                                              workers=workers, image_weights=opt.image_weights, quad=opt.quad,
-                                              prefix=colorstr('train: '))
+    if opt.pseudo:
+        print("Using train labels with pseudo labels")
+        train_loader, dataset = added_pseudo_dataloader(train_path, pseudo_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
+                                                      hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=RANK, 
+                                                      workers=workers, image_weights=opt.image_weights, quad=opt.quad,
+                                                      prefix=colorstr('train: '))
+    else:
+        train_loader, dataset = create_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
+                                                hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=RANK,
+                                                workers=workers, image_weights=opt.image_weights, quad=opt.quad,
+                                                prefix=colorstr('train: '))
     mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
     nb = len(train_loader)  # number of batches
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
@@ -469,16 +477,7 @@ def parse_opt(known=False):
     parser.add_argument('--linear-lr', action='store_true', help='linear LR')
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
-    parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
-    parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
-    parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-
-    # Weights & Biases arguments
-    parser.add_argument('--entity', default=None, help='W&B: Entity')
-    parser.add_argument('--upload_dataset', action='store_true', help='W&B: Upload dataset as artifact table')
-    parser.add_argument('--bbox_interval', type=int, default=-1, help='W&B: Set bounding-box image logging interval')
-    parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
-
+    parser.add_argument('--pseudo', action='store_true', help='semi-supervised learning')
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
