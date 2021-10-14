@@ -252,3 +252,7 @@ fabric.properties
 experiments/
 datasets/
 raw/
+bash/
+build-devel.sh
+run-devel.sh
+run-devel.sh.save
