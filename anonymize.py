@@ -30,7 +30,7 @@ from utils.augmentations import letterbox
 
 @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
-        lpd_weights='weights/yolov5x_lpd.pt',
+        lpd_weights=None,
         source='data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
         lpd_imgsz=640,
@@ -112,18 +112,20 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
     imgsz = check_img_size(imgsz, s=stride)  # check image size
     ascii = is_ascii(names)  # names are ascii (use PIL for UTF-8)
 
-    # Load lpd model
-    classify = False
-    lpd_model = attempt_load(lpd_weights, map_location=device)  # load FP32 model
-    lpd_stride = int(lpd_model.stride.max())  # model stride
-    lpd_names = lpd_model.module.names if hasattr(lpd_model, 'module') else lpd_model.names  # get class names
-    if half:
-        lpd_model.half()  # to FP16
-    if classify:  # second-stage classifier
-        lpd_modelc = load_classifier(name='resnet50', n=2)  # initialize
-        lpd_modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
-    lpd_imgsz = check_img_size(lpd_imgsz, s=lpd_stride)  # check image size
-    lpd_ascii = is_ascii(lpd_names)  # names are ascii (use PIL for UTF-8) 
+    if lpd_weights is not None:
+        # Load lpd model
+        classify = False
+        lpd_model = attempt_load(lpd_weights, map_location=device)  # load FP32 model
+        lpd_stride = int(lpd_model.stride.max())  # model stride
+        lpd_names = lpd_model.module.names if hasattr(lpd_model, 'module') else lpd_model.names  # get class names
+        if half:
+            lpd_model.half()  # to FP16
+        if classify:  # second-stage classifier
+            lpd_modelc = load_classifier(name='resnet50', n=2)  # initialize
+            lpd_modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
+        lpd_imgsz = check_img_size(lpd_imgsz, s=lpd_stride)  # check image size
+        lpd_ascii = is_ascii(lpd_names)  # names are ascii (use PIL for UTF-8) 
+
     vehicles = ['car', 'motorcycle', 'bus', 'truck']
 
     # Dataloader
@@ -233,7 +235,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
                         c = int(cls)
                         label = names[c]
-                        if label in vehicles:
+                        if label in vehicles and lpd_weights is not None:
                             veh_bbox = torch.from_numpy(bbox).to(device)
                             veh_im0 = im0[veh_bbox[1] : veh_bbox[3], veh_bbox[0] : veh_bbox[2]] 
 
@@ -275,13 +277,14 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                                             bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2],
                                         ] = sub_im
 
-                        elif label == 'person':
-                            sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]
-                            sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                            im0[
-                                bbox[1] : bbox[1] + sub_im.shape[0],
-                                bbox[0] : bbox[0] + sub_im.shape[1],
-                            ] = sub_im
+                        elif label == 'head':
+                            if bbox[3] > bbox[1] and bbox[2] > bbox[0]:
+                                sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]                                                   
+                                sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                                im0[
+                                    bbox[1] : bbox[1] + sub_im.shape[0],
+                                    bbox[0] : bbox[0] + sub_im.shape[1],
+                                ] = sub_im
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
@@ -324,7 +327,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--lpd-weights', nargs='+', type=str, default='yolov5s.pt', help='lpd model.pt path(s)')
+    parser.add_argument('--lpd-weights', nargs='+', type=str, default=None, help='lpd model.pt path(s)')
     parser.add_argument('--source', type=str, default='data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--lpd-imgsz', '--lpd-img', '--lpd-img-size', nargs='+', type=int, default=[640], help='inference size h,w')
