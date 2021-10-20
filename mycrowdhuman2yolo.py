@@ -11,16 +11,8 @@ Inputs:
 Outputs:
     * crowdhuman-{width}x{height}/images/train
     * crowdhuman-{width}x{height}/images/valid
-    * crowdhuman-{width}x{height}/images/extra
-    * crowdhuman-{width}x{height}/images/pseudo
     * crowdhuman-{width}x{height}/labels/train/[IDs].txt (one annotation for each image in the training set)
     * crowdhuman-{width}x{height}/labels/valid/[IDs].txt (one annotation for each image in the testing set)
-    * crowdhuman-{width}x{height}/labels/extra
-    * crowdhuman-{width}x{height}/labels/pseudo
-    
-    * crowdhuman-{width}x{height}/train.txt
-    * crowdhuman-{width}x{height}/test.txt
-    * crowdhuman-{width}x{height}/[IDs].txt (one annotation for each image in the training or test set)
 """
 
 
@@ -28,6 +20,7 @@ import os
 import json
 from pathlib import Path
 from argparse import ArgumentParser
+from shutil import copyfile
 
 import numpy as np
 import cv2
@@ -43,7 +36,7 @@ MIN_W = 5
 MIN_H = 5
 
 # Do K-Means clustering in order to determine "anchor" sizes
-DO_KMEANS = False
+DO_KMEANS = True
 KMEANS_CLUSTERS = 9
 BBOX_WHS = []  # keep track of bbox width/height with respect to 608x608
 
@@ -78,18 +71,18 @@ def txt_line(cls, bbox, img_w, img_h):
         return '%d %.6f %.6f %.6f %.6f\n' % (cls, cx, cy, nw, nh)
 
 
-def process(source, set_='test', annotation_filename='raw/annotation_val.odgt',
+def process(image_dir, set_='test', annotation_filename='raw/annotation_val.odgt',
             output_dir=None):
     """Process either 'train' or 'test' set."""
     assert output_dir is not None
     output_dir.mkdir(exist_ok=True)
-    jpgs = []
+    # jpgs = []
     with open(annotation_filename, 'r') as fanno:
         for raw_anno in fanno.readlines():
             anno = json.loads(raw_anno)
             ID = anno['ID']  # e.g. '273271,c9db000d5146c15'
             print('Processing ID: %s' % ID)
-            img_h, img_w, img_c = image_shape(ID, output_dir)
+            img_h, img_w, img_c = image_shape(ID, image_dir)
             assert img_c == 3  # should be a BGR image
             txt_path = output_dir / 'labels' / set_ / ('%s.txt' % ID)
             Path(txt_path).parent.mkdir(parents=True, exist_ok=True)
@@ -107,14 +100,16 @@ def process(source, set_='test', annotation_filename='raw/annotation_val.odgt',
                         line = txt_line(1, obj['fbox'], img_w, img_h)
                         if line:
                             ftxt.write(line)
-            jpgs.append('%s/%s/%s/%s.jpg' % (output_dir, 'images', set_, ID))
+            # jpgs.append('%s/%s/%s/%s.jpg' % (output_dir, 'images', set_, ID)
+            src = image_dir / ('%s.jpg' % ID)
+            dst = '%s/%s/%s/%s.jpg' % (output_dir, 'images', set_, ID)
+            copyfile(src, dst)
     # write the 'data/crowdhuman/train.txt' or 'data/crowdhuman/test.txt'
     # set_path = output_dir / ('%s.txt' % set_)
     # with open(set_path.as_posix(), 'w') as fset:
     #     for jpg in jpgs:
     #         fset.write('%s\n' % jpg)
-    for jpg in jpgs:
-        os.symlink(source / ('%s.jpg' % ID), jpg)
+
 
 def rm_txts(output_dir):
     """Remove txt files in output_dir."""
@@ -127,7 +122,7 @@ def main():
     global INPUT_WIDTH, INPUT_HEIGHT
 
     parser = ArgumentParser()
-    parser.add_argument('--source', type=str, default='/datasets/CrowdHuman/Images', help='path to CrowdHuman images')
+    parser.add_argument('--source', type=str, default='/datasets/CrowdHuman', help='path to CrowdHuman data')
     parser.add_argument('--dim', help='input width and height, e.g. 608x608')
     args = parser.parse_args()
 
@@ -139,13 +134,18 @@ def main():
     if INPUT_WIDTH % 32 != 0 or INPUT_HEIGHT % 32 != 0:
         raise SystemExit('ERROR: bad spec of input dim (%s)' % args.dim)
 
-    output_dir = Path('datasets/crowdhuman-%s' % args.dim)
+    output_dir = Path('/datasets/crowdhuman-%s' % args.dim)
     if not output_dir.is_dir():
         raise SystemExit('ERROR: %s does not exist.' % output_dir.as_posix())
+    image_dir = Path(os.path.join(source, 'Images'))
+    if not image_dir.is_dir():
+        raise SystemExit('ERROR: %s does not exist.' % image_dir.as_posix())
+    annotation_val_file = os.path.join(source, 'annotation_val.odgt')
+    annotation_train_file = os.path.join(source, 'annotation_train.odgt')
 
     rm_txts(output_dir)
-    process(source, 'valid', 'raw/annotation_val.odgt', output_dir)
-    process(source, 'train', 'raw/annotation_train.odgt', output_dir)
+    process(image_dir, 'valid', annotation_val_file, output_dir)
+    process(image_dir, 'train', annotation_train_file, output_dir)
 
 #     with open('data/crowdhuman-%s.data' % args.dim, 'w') as f:
 #         f.write("""classes = 2
