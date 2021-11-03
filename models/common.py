@@ -98,45 +98,6 @@ class TransformerBlock(nn.Module):
         return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
 
 
-class DETRTransformer(nn.Module):
-    # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
-    def __init__(self, c, d_model, num_heads):
-        super().__init__()
-
-        encoder_layer = TransformerEncoderLayer(
-            d_model, nhead, dim_feedforward, dropout, activation, normalize_before
-        )
-        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(
-            encoder_layer, num_encoder_layers, encoder_norm
-        )
-
-        self._reset_parameters()
-
-        self.c = c
-        self.d_model = d_model
-        self.nhead = nhead
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def forward(self, src, mask, query_embed, pos_embed):  # F_{s} NxCxHxW
-        # flatten NxCxHxW to HWxNxC
-        bs, c, h, w = src.shape
-        src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-        mask = mask.flatten(1)
-
-        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        # 1. take the maximum of A'_s in the second dimension
-        # 2. reshape the resulting vector to H_s x W_s
-        # 3. min-max normalize the resulting matrix to the [0, 1] range
-        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s
-
-    
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
@@ -152,26 +113,71 @@ def _get_activation_fn(activation):
     raise RuntimeError(f"activation should be relu/gelu, not {activation}.")
 
 
+class Transformer(nn.Module):
+    # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
+    def __init__(
+        self, 
+        num_channels, 
+        d_model, 
+        num_heads, 
+        num_layers, 
+        dim_feedforward=2048,
+        dropout=0.1,
+        activation="relu"
+        ):
+        super().__init__()
+        self.conv = None
+        if num_channels != d_model:
+            self.conv = Conv(num_channels, d_model)  # NxCxHxW to NxDxHxW
+        self.pos_embed = nn.Linear(d_model, d_model)  # learnable position embedding
+        encoder_layer = TransformerEncoderLayer(
+            d_model, num_heads, dim_feedforward, dropout, activation
+        )
+        encoder_norm = None
+        self.encoder = TransformerEncoder(
+            encoder_layer, num_layers, encoder_norm
+        )
+
+        self._reset_parameters()
+
+        self.d_model = d_model
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, mask, query_embed):  # F_{s} NxDxHxW
+        # flatten NxDxHxW to HWxNxD
+        bs, c, h, w = src.shape
+        src = src.flatten(2).permute(2, 0, 1)
+        pos_embed = self.pos_embed.flatten(2).permute(2, 0, 1)
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        mask = mask.flatten(1)
+        src = src + pos_embed(src)
+
+        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask)
+        # 1. take the maximum of A'_s in the second dimension
+        # 2. reshape the resulting vector to H_s x W_s
+        # 3. min-max normalize the resulting matrix to the [0, 1] range
+        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s
+
+
 class TransformerEncoder(nn.Module):
-    def __init__(self, encoder_layer, num_layers, norm=None):
+    def __init__(self, encoder_layer, num_layers):
         super().__init__()
         self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
-        self.norm = norm
 
-    def forward(self, src, mask=None, src_key_padding_mask=None, pos=None):
+    def forward(self, src, mask=None, src_key_padding_mask=None):
         output = src
 
         for layer in self.layers:
             output, attn_output_weights = layer(
                 output,
                 src_mask=mask,
-                src_key_padding_mask=src_key_padding_mask,
-                pos=pos,
+                src_key_padding_mask=src_key_padding_mask
             )
-
-        if self.norm is not None:
-            output = self.norm(output)
 
         return output, attn_output_weights
 
@@ -179,23 +185,19 @@ class TransformerEncoder(nn.Module):
 class TransformerEncoderLayer(nn.Module):
     def __init__(
         self,
-        c,
         d_model,
         nhead,
         dim_feedforward=2048,
         dropout=0.1,
         activation="relu",
-        normalize_before=False,
     ):
         super().__init__()
-        self.linear = nn.Linear(d_model, d_model)  # learnable position embedding
-
         # self.q = nn.Conv2d(c, d_model, kernel_size=1)
-        self.q = nn.Linear(c, d_model, bias=False)
-        self.k = nn.Linear(c, d_model, bias=False)
-        self.v = nn.Linear(c, c, bias=False)
+        self.q = nn.Linear(d_model, d_model, bias=False)
+        self.k = nn.Linear(d_model, d_model, bias=False)
+        self.v = nn.Linear(d_model, d_model, bias=False)
 
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, vdim=c)
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -207,54 +209,31 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
         self.activation = _get_activation_fn(activation)
-        self.normalize_before = normalize_before
 
-    def with_pos_embed(self, tensor, pos):
-        return tensor if pos is None else tensor + pos
-
-    def forward_post(
+    def forward(
         self,
         src,  # embedding H_sW_sxD
         src_mask=None,
-        src_key_padding_mask=None
+        src_key_padding_mask=None,
     ):
         # q H_sW_sxD
         # k H_sW_sxD
-        # v H_sW_sxC_s
-        q = self.with_pos_embed(self.q(src), self.linear)  # encoder input
-        k = self.with_pos_embed(self.k(src), self.linear)  # encoder input
-        v = self.v(src)
+        # v H_sW_sxD
+        q = self.q(src)  # encoder input
+        k = self.k(src)  # encoder input
+        v = self.v(src)  # encoder input
         # G'_s, A'_s
-        src2, attn_output_weights = self.self_attn(
+        attn_output, attn_output_weights = self.self_attn(
             q, k, value=v, attn_mask=src_mask, key_padding_mask=src_key_padding_mask
         )
 
-        src = src + self.dropout1(src2)
+        src = src + self.dropout1(attn_output)
         # X~q
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src, attn_output_weights
-
-    def forward_pre(self, src, src_mask=None, src_key_padding_mask=None, pos=None):
-        v = self.v(src)
-        src2 = self.norm1(v)
-        q = self.with_pos_embed(self.q(src2), self.linear)  # encoder input
-        k = self.with_pos_embed(self.k(src2), self.linear)  # encoder input
-        src2, attn_output_weights = self.self_attn(
-            q, k, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask
-        )[0]
-        src = src + self.dropout1(src2)
-        src2 = self.norm2(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
-        src = src + self.dropout2(src2)
-        return src, attn_output_weights
-
-    def forward(self, src, src_mask=None, src_key_padding_mask=None, pos=None):
-        if self.normalize_before:
-            return self.forward_pre(src, src_mask, src_key_padding_mask, pos)
-        return self.forward_post(src, src_mask, src_key_padding_mask, pos)
 
 
 class Bottleneck(nn.Module):
@@ -325,20 +304,28 @@ class C3x(C3):
         self.m = nn.Sequential(*(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)))
 
 
+# class C3TR(C3):
+#     # C3 module with TransformerBlock()
+#     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+#         super().__init__(c1, c2, n, shortcut, g, e)
+#         c_ = int(c2 * e)
+#         self.m = TransformerBlock(c_, c_, 4, n)
+
+
 class C3TR(C3):
-    # C3 module with TransformerBlock()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)
-        self.m = TransformerBlock(c_, c_, 4, n)
-
-
-class C3DetrTR(C3):
     # C3 module with DetrTransformer()
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
-        self.m = DetrTransformer(c_, c_, 4, n)
+        self.m = Transformer(c_, c_, 4, n)
+
+
+class C3DETRTR(C3):
+    # C3 module with DetrTransformer()
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = DETRTransformer(c_, c_, 4, n)
 
 
 class C3SPP(C3):
