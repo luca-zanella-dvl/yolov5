@@ -7,6 +7,7 @@ import logging
 import math
 import warnings
 from copy import copy
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -93,7 +94,7 @@ class TransformerBlock(nn.Module):
 
 
 def _get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+    return nn.ModuleList([deepcopy(module) for i in range(N)])
 
 
 def _get_activation_fn(activation):
@@ -218,16 +219,16 @@ class DETRTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed):  # F_{s} NxDxHxW
+    def forward(self, src, mask, pos_embed):  # F_{s} NxDxHxW
         # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
         pos_embed = self.pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
 
         memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
+
         # 2. reshape the resulting vector to H_s x W_s
         # 3. min-max normalize the resulting matrix to the [0, 1] range
         return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s, A_s
@@ -354,9 +355,8 @@ class Transformer(nn.Module):
         encoder_layer = TransformerEncoderLayer(
             d_model, num_heads, dim_feedforward, dropout, activation
         )
-        encoder_norm = None
         self.encoder = TransformerEncoder(
-            encoder_layer, num_layers, encoder_norm
+            encoder_layer, num_layers
         )
 
         self._reset_parameters()
@@ -368,16 +368,15 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed):  # F_{s} NxDxHxW
+    def forward(self, src):  # F_{s} NxDxHxW
         # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = self.pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-        mask = mask.flatten(1)
-        src = src + pos_embed(src)
+        if self.conv is not None:
+            src = self.conv(src)
+        src = src + self.pos_embed(src)
 
-        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask)  # G'_s, A'_s
+        memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
         # 2. reshape the resulting vector to H_s x W_s
         # 3. min-max normalize the resulting matrix to the [0, 1] range
@@ -561,16 +560,24 @@ class C3(nn.Module):
 #         self.m = TransformerBlock(c_, c_, 4, n)
 
 
-class C3TR(C3):
-    # C3 module with DetrTransformer()
+class C3TR(nn.Module):
+    # C3 module with Transformer()
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)
-        self.m = Transformer(c_, c_, 4, n)
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
+        self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = Transformer(c_, c_, 4, n)
+        
+    def forward(self, x):
+        x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
+        return x + self.m2(x)
 
 
 class C3DETRTR(C3):
-    # C3 module with DetrTransformer()
+    # C3 module with DETRTransformer()
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
