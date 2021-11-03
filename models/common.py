@@ -107,6 +107,233 @@ def _get_activation_fn(activation):
     raise RuntimeError(f"activation should be relu/gelu, not {activation}.")
 
 
+class PositionEmbeddingSine(nn.Module):
+    """
+    This is a more standard version of the position embedding, very similar to the one
+    used by the Attention is all you need paper, generalized to work on images.
+    """
+    def __init__(self, num_pos_feats=64, temperature=10000, normalize=False, scale=None):
+        super().__init__()
+        self.num_pos_feats = num_pos_feats
+        self.temperature = temperature
+        self.normalize = normalize
+        if scale is not None and normalize is False:
+            raise ValueError("normalize should be True if scale is passed")
+        if scale is None:
+            scale = 2 * math.pi
+        self.scale = scale
+
+    def forward(self, tensor_list):
+        x = tensor_list.tensors
+        mask = tensor_list.mask
+        assert mask is not None
+        not_mask = ~mask
+        y_embed = not_mask.cumsum(1, dtype=torch.float32)
+        x_embed = not_mask.cumsum(2, dtype=torch.float32)
+        if self.normalize:
+            eps = 1e-6
+            y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
+            x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
+
+        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
+        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+
+        pos_x = x_embed[:, :, :, None] / dim_t
+        pos_y = y_embed[:, :, :, None] / dim_t
+        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
+        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
+        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
+        return pos
+
+
+class PositionEmbeddingLearned(nn.Module):
+    """
+    Absolute pos embedding, learned.
+    """
+    def __init__(self, num_pos_feats=256):
+        super().__init__()
+        self.row_embed = nn.Embedding(50, num_pos_feats)
+        self.col_embed = nn.Embedding(50, num_pos_feats)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.uniform_(self.row_embed.weight)
+        nn.init.uniform_(self.col_embed.weight)
+
+    def forward(self, tensor_list):
+        x = tensor_list.tensors
+        h, w = x.shape[-2:]
+        i = torch.arange(w, device=x.device)
+        j = torch.arange(h, device=x.device)
+        x_emb = self.col_embed(i)
+        y_emb = self.row_embed(j)
+        pos = torch.cat([
+            x_emb.unsqueeze(0).repeat(h, 1, 1),
+            y_emb.unsqueeze(1).repeat(1, w, 1),
+        ], dim=-1).permute(2, 0, 1).unsqueeze(0).repeat(x.shape[0], 1, 1, 1)
+        return pos
+
+
+class DETRTransformer(nn.Module):
+    # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
+    def __init__(
+        self, 
+        num_channels, 
+        d_model, 
+        num_heads, 
+        num_layers, 
+        dim_feedforward=2048,
+        dropout=0.1,
+        activation="relu", 
+        normalize_before=False,
+        position_embedding="sine"
+        ):
+        super().__init__()
+        self.conv = None
+        if num_channels != d_model:
+            # NxCxHxW to NxDxHxW
+            self.conv = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding 
+        N_steps = d_model // 2
+        if position_embedding in ('v2', 'sine'):
+            self.pos_embed = PositionEmbeddingSine(N_steps, normalize=True)  # learnable position embedding
+        elif position_embedding in ('v3', 'learned'):
+            position_embedding = PositionEmbeddingLearned(N_steps)
+        else:
+            raise ValueError(f"not supported {position_embedding}")
+        encoder_layer = DETRTransformerEncoderLayer(
+            d_model, num_heads, dim_feedforward, dropout, activation, normalize_before
+        )
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        self.encoder = DETRTransformerEncoder(
+            encoder_layer, num_layers, encoder_norm
+        )
+
+        self._reset_parameters()
+
+        self.d_model = d_model
+        self.nhead = num_heads
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, mask, query_embed, pos_embed):  # F_{s} NxDxHxW
+        # flatten NxDxHxW to HWxNxD
+        bs, c, h, w = src.shape
+        src = src.flatten(2).permute(2, 0, 1)
+        pos_embed = self.pos_embed.flatten(2).permute(2, 0, 1)
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        mask = mask.flatten(1)
+
+        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)  # G'_s, A'_s
+        # 1. take the maximum of A'_s in the second dimension
+        # 2. reshape the resulting vector to H_s x W_s
+        # 3. min-max normalize the resulting matrix to the [0, 1] range
+        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s, A_s
+
+
+class DETRTransformerEncoder(nn.Module):
+    def __init__(self, encoder_layer, num_layers, norm=None):
+        super().__init__()
+        self.layers = _get_clones(encoder_layer, num_layers)
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, src, mask=None, src_key_padding_mask=None, pos=None):
+        output = src
+
+        for layer in self.layers:
+            output, attn_output_weights = layer(
+                output,
+                src_mask=mask,
+                src_key_padding_mask=src_key_padding_mask,
+                pos=pos
+            )
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        return output, attn_output_weights
+
+
+class DETRTransformerEncoderLayer(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        nhead,
+        dim_feedforward=2048,
+        dropout=0.1,
+        activation="relu",
+        normalize_before=False
+    ):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.activation = _get_activation_fn(activation)
+        self.normalize_before = normalize_before
+
+    def with_pos_embed(self, tensor, pos=None):
+        return tensor if pos is None else tensor + pos
+
+    def forward_post(
+        self,
+        src,  # embedding H_sW_sxD
+        src_mask=None,
+        src_key_padding_mask=None,
+        pos=None
+    ):
+        # q H_sW_sxD
+        # k H_sW_sxD
+        # v H_sW_sxC_s C_s = D
+        q = k = self.with_pos_embed(src, pos)  # encoder input
+        # G'_s, A'_s
+        attn_output, attn_output_weights = self.self_attn(
+            q, k, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask
+        )
+        src = src + self.dropout1(attn_output)
+        # X~q
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src, attn_output_weights
+
+    def forward_pre(
+        self,
+        src,  # embedding H_sW_sxD
+        src_mask=None,
+        src_key_padding_mask=None,
+        pos=None
+    ):
+        src2 = self.norm1(src)
+        q = k = self.with_pos_embed(src2, pos)
+        src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask,
+                              key_padding_mask=src_key_padding_mask)[0]
+        src = src + self.dropout1(src2)
+        src2 = self.norm2(src)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
+        src = src + self.dropout2(src2)
+        return src
+
+    def forward(self, src,
+                src_mask=None,
+                src_key_padding_mask=None,
+                pos=None):
+        if self.normalize_before:
+            return self.forward_pre(src, src_mask, src_key_padding_mask, pos)
+        return self.forward_post(src, src_mask, src_key_padding_mask, pos)
+
+
 class Transformer(nn.Module):
     # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
     def __init__(
@@ -150,11 +377,11 @@ class Transformer(nn.Module):
         mask = mask.flatten(1)
         src = src + pos_embed(src)
 
-        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask)
+        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
         # 2. reshape the resulting vector to H_s x W_s
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s
+        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s, A_s
 
 
 class TransformerEncoder(nn.Module):
@@ -231,12 +458,12 @@ class TransformerEncoderLayer(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, height, width):
+    def __init__(self, dim_Ms):
         super().__init__()
         self.rev = GradientReversal(),
         
         # need to strengthen the classification architecture
-        self.linear1 = nn.Linear(height*width, 512), # to review dimension
+        self.linear1 = nn.Linear(dim_Ms, 512), # to review dimension
         self.linear2 = nn.Linear(512, 256),
         self.classifier = nn.Linear(256, 1)
     
@@ -340,6 +567,14 @@ class C3TR(C3):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
         self.m = Transformer(c_, c_, 4, n)
+
+
+class C3DETRTR(C3):
+    # C3 module with DetrTransformer()
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = DETRTransformer(c_, c_, 4, n)
 
 
 class C3SPP(C3):
