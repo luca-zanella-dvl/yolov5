@@ -18,6 +18,7 @@ import requests
 import torch
 import torch.nn as nn
 import yaml
+import torch.nn.functional as F
 from PIL import Image
 from torch.cuda import amp
 
