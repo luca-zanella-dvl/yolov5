@@ -15,6 +15,7 @@ import requests
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Function
 from PIL import Image
 from torch.cuda import amp
 
@@ -229,6 +230,55 @@ class TransformerEncoderLayer(nn.Module):
         return src, attn_output_weights
 
 
+class Discriminator(nn.Module):
+    def __init__(self, height, width):
+        super().__init__()
+        self.rev = GradientReversal(),
+        
+        # need to strengthen the classification architecture
+        self.linear1 = nn.Linear(height*width, 512), # to review dimension
+        self.linear2 = nn.Linear(512, 256),
+        self.classifier = nn.Linear(256, 1)
+    
+    def forward(self, x):
+        x = self.rev(x)
+        
+        x = torch.flatten(x)
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        x = self.classifier(x)
+        return x
+
+
+class GradientReversal(torch.nn.Module):
+    def __init__(self, lambda_=1):
+        super(GradientReversal, self).__init__()
+        self.lambda_ = lambda_
+
+    def forward(self, x):
+        return GradientReversalFunction.apply(x, self.lambda_)
+
+class GradientReversalFunction(Function):
+    """
+    Gradient Reversal Layer from:
+    Unsupervised Domain Adaptation by Backpropagation (Ganin & Lempitsky, 2015)
+    Forward pass is the identity function. In the backward pass,
+    the upstream gradients are multiplied by -lambda (i.e. gradient is reversed)
+    """
+
+    @staticmethod
+    def forward(ctx, x, lambda_):
+        ctx.lambda_ = lambda_
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grads):
+        lambda_ = ctx.lambda_
+        lambda_ = grads.new_tensor(lambda_)
+        dx = -lambda_ * grads
+        return dx, None
+
+
 class Bottleneck(nn.Module):
     # Standard bottleneck
     def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
@@ -290,14 +340,6 @@ class C3TR(C3):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
         self.m = Transformer(c_, c_, 4, n)
-
-
-class C3DETRTR(C3):
-    # C3 module with DetrTransformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)
-        self.m = DETRTransformer(c_, c_, 4, n)
 
 
 class C3SPP(C3):

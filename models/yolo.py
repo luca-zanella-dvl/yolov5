@@ -140,8 +140,15 @@ class Model(nn.Module):
         return torch.cat(y, 1), None  # augmented inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
-        y, dt = [], []  # outputs
+        y, dt , output_disc = [], [], []  # outputs
         for m in self.model:
+            if m is Discriminator:
+                # need to define M which is composed by the output of the previous layer and attention
+                M = x # *A
+                output = m(M, M.shape[2], M.shape[3]) # to review dimension
+                output_disc.append(output)
+                continue
+
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
@@ -150,7 +157,7 @@ class Model(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x
+        return x, output_disc
 
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
