@@ -151,12 +151,12 @@ class Model(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False):
         y, dt , output_disc = [], [], []  # outputs
         for m in self.model:
-            if m is Discriminator:
-                # need to define M which is composed by the output of the previous layer and attention
-                M = x # *A
-                output = m(M, M.shape[2], M.shape[3]) # to review dimension
-                output_disc.append(output)
-                continue
+            # if m is Discriminator:
+            #     # need to define M which is composed by the output of the previous layer and attention
+            #     M = x # *A
+            #     output = m(M, M.shape[2], M.shape[3]) # to review dimension
+            #     output_disc.append(output)
+            #     continue
 
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -166,7 +166,7 @@ class Model(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x, output_disc
+        return x#, output_disc
 
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
@@ -273,13 +273,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                 BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
+                 BottleneckCSP, C3, C3TR, C3DETRTR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3x]:
+            if m in [BottleneckCSP, C3, C3TR, C3DETRTR, C3Ghost, C3x]:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:

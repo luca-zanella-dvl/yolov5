@@ -115,45 +115,6 @@ def _get_activation_fn(activation):
     raise RuntimeError(f"activation should be relu/gelu, not {activation}.")
 
 
-class PositionEmbeddingSine(nn.Module):
-    """
-    This is a more standard version of the position embedding, very similar to the one
-    used by the Attention is all you need paper, generalized to work on images.
-    """
-    def __init__(self, num_pos_feats=64, temperature=10000, normalize=False, scale=None):
-        super().__init__()
-        self.num_pos_feats = num_pos_feats
-        self.temperature = temperature
-        self.normalize = normalize
-        if scale is not None and normalize is False:
-            raise ValueError("normalize should be True if scale is passed")
-        if scale is None:
-            scale = 2 * math.pi
-        self.scale = scale
-
-    def forward(self, tensor_list):
-        x = tensor_list.tensors
-        mask = tensor_list.mask
-        assert mask is not None
-        not_mask = ~mask
-        y_embed = not_mask.cumsum(1, dtype=torch.float32)
-        x_embed = not_mask.cumsum(2, dtype=torch.float32)
-        if self.normalize:
-            eps = 1e-6
-            y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
-            x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
-
-        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
-
-        pos_x = x_embed[:, :, :, None] / dim_t
-        pos_y = y_embed[:, :, :, None] / dim_t
-        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-        return pos
-
-
 class PositionEmbeddingLearned(nn.Module):
     """
     Absolute pos embedding, learned.
@@ -168,8 +129,8 @@ class PositionEmbeddingLearned(nn.Module):
         nn.init.uniform_(self.row_embed.weight)
         nn.init.uniform_(self.col_embed.weight)
 
-    def forward(self, tensor_list):
-        x = tensor_list.tensors
+    def forward(self, tensors):
+        x = tensors
         h, w = x.shape[-2:]
         i = torch.arange(w, device=x.device)
         j = torch.arange(h, device=x.device)
@@ -193,8 +154,7 @@ class DETRTransformer(nn.Module):
         dim_feedforward=2048,
         dropout=0.1,
         activation="relu", 
-        normalize_before=False,
-        position_embedding="sine"
+        normalize_before=False
         ):
         super().__init__()
         self.conv = None
@@ -202,12 +162,7 @@ class DETRTransformer(nn.Module):
             # NxCxHxW to NxDxHxW
             self.conv = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding 
         N_steps = d_model // 2
-        if position_embedding in ('v2', 'sine'):
-            self.pos_embed = PositionEmbeddingSine(N_steps, normalize=True)  # learnable position embedding
-        elif position_embedding in ('v3', 'learned'):
-            position_embedding = PositionEmbeddingLearned(N_steps)
-        else:
-            raise ValueError(f"not supported {position_embedding}")
+        self.pos_embed = PositionEmbeddingLearned(N_steps)
         encoder_layer = DETRTransformerEncoderLayer(
             d_model, num_heads, dim_feedforward, dropout, activation, normalize_before
         )
@@ -226,19 +181,23 @@ class DETRTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, pos_embed):  # F_{s} NxDxHxW
+    def forward(self, src, mask=None):  # F_{s} NxDxHxW
         # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
+        pos_embed = self.pos_embed(src).flatten(2).permute(2, 0, 1)
         src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = self.pos_embed.flatten(2).permute(2, 0, 1)
-        mask = mask.flatten(1)
+        if mask is not None:
+            mask = mask.flatten(1)
 
         memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
-
+        max_values, inds = torch.max(attn_output_weights, 2)
         # 2. reshape the resulting vector to H_s x W_s
+        A_s = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s, A_s
+        A_s -= A_s.min(1, keepdim=True)[0]
+        A_s /= A_s.max(1, keepdim=True)[0]
+        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(A_s)  # G_s, A_s
 
 
 class DETRTransformerEncoder(nn.Module):
@@ -385,9 +344,13 @@ class Transformer(nn.Module):
 
         memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
+        max_values, inds = torch.max(attn_output_weights, 2)
         # 2. reshape the resulting vector to H_s x W_s
+        A_s = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        return memory.permute(1, 2, 0).view(bs, c, h, w), attn_output_weights  # G_s, A_s
+        A_s -= A_s.min(1, keepdim=True)[0]
+        A_s /= A_s.max(1, keepdim=True)[0]
+        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(A_s)  # G_s, A_s
 
 
 class TransformerEncoder(nn.Module):
@@ -548,19 +511,27 @@ class C3TR(nn.Module):
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
         self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = Transformer(c_, c_, 4, n)
+        self.m2 = Transformer(c2, c2, 4, n)
         
     def forward(self, x):
         x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
-        return x + self.m2(x)
+        return x + self.m2(x)[0]
 
 
-class C3DETRTR(C3):
+class C3DETRTR(nn.Module):
     # C3 module with DETRTransformer()
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)
-        self.m = DETRTransformer(c_, c_, 4, n)
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
+        self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = DETRTransformer(c2, c2, 4, n)
+        
+    def forward(self, x):
+        x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
+        return x + self.m2(x)[0]
 
 
 class C3SPP(C3):
