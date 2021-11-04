@@ -144,7 +144,6 @@ class Model(nn.Module):
         y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
             if 'Discriminator' in m.type:
-                # need to define M which is composed by the output of the previous layer and attention
                 # NxHxW to Nx1xHxW
                 obj_map = torch.unsqueeze(obj_map, 1)
                 # Nx1xHxW to Nx3xHxW
@@ -164,7 +163,7 @@ class Model(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x, dis_out
+        return x if dis_out == [] else x, dis_out
 
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
