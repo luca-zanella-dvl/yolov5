@@ -43,7 +43,7 @@ from utils.general import labels_to_class_weights, increment_path, labels_to_ima
     strip_optimizer, get_latest_run, check_dataset, check_git_status, check_img_size, check_requirements, \
     check_file, check_yaml, check_suffix, print_args, print_mutation, set_logging, one_cycle, colorstr, methods
 from utils.downloads import attempt_download
-from utils.loss import ComputeLoss
+from utils.loss import ComputeLoss, ComputeLossDis
 from utils.plots import plot_labels, plot_evolve
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, intersect_dicts, select_device, \
     torch_distributed_zero_first
@@ -63,9 +63,9 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
           device,
           callbacks
           ):
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, pseudo = \
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, pseudo, delta = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
-        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.pseudo
+        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.pseudo, opt.delta
 
     # Directories
     w = save_dir / 'weights'  # weights dir
@@ -277,10 +277,12 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
+    compute_loss_dis = ComputeLossDis([256, 128, 256])
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
+    max_iterations = nb * epochs
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
@@ -327,20 +329,19 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
             # Forward
             with amp.autocast(enabled=cuda):
-                pred, pred_disc = model(imgs)  # forward
+                r = ni / max_iterations
+                gamma = 2 / (1 + math.exp(-delta * r)) - 1 
+                pred, pred_dis = model(imgs, gamma)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-                # disc loss function is torch.nn.BCEWithLogitsLoss(size)
-                # loss_disc1 = BCEWithLogitsLoss(pred_disc[0])
-                # loss_disc2 = BCEWithLogitsLoss(pred_disc[1])
-                # loss_disc3 = BCEWithLogitsLoss(pred_disc[2])
-                # then we backpropagate the loss and done
+                loss_dis = compute_loss_dis(pred_dis, target_domain.to(device)) # need to define target_domain (source, target)
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.
+                total_loss = lambda1 * loss + lambda2 * loss_dis
 
             # Backward
-            scaler.scale(loss).backward()
+            scaler.scale(total_loss).backward()
 
             # Optimize
             if ni - last_opt_step >= accumulate:
@@ -486,6 +487,7 @@ def parse_opt(known=False):
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
     parser.add_argument('--pseudo', action='store_true', help='semi-supervised learning')
+    parser.add_argument('--delta', type=float, default=5., help='Smoothness of the domain adaptation change')
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 

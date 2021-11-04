@@ -232,3 +232,18 @@ class ComputeLoss:
             tcls.append(c)  # class
 
         return tcls, tbox, indices, anch
+
+class ComputeLossDis:
+    # Compute losses
+    def __init__(self, w):
+        
+        self.BCE1 = nn.BCEWithLogitsLoss(weight=1/w[0])
+        self.BCE2 = nn.BCEWithLogitsLoss(weight=1/w[1])
+        self.BCE3 = nn.BCEWithLogitsLoss(weight=1/w[2])
+
+    def __call__(self, p, targets):  # predictions, targets
+        loss1 = self.BCE1(p[0], targets)
+        loss2 = self.BCE2(p[1], targets)
+        loss3 = self.BCE3(p[2], targets)
+
+        return loss1 + loss2 + loss3
