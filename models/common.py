@@ -335,7 +335,7 @@ class Transformer(nn.Module):
             src = self.conv(src)
         src = src + self.pos_embed(src)
 
-        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)  # G'_s, A'_s
+        memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
         max_values, inds = torch.max(attn_output_weights, 2)
         # 2. reshape the resulting vector to H_s x W_s
