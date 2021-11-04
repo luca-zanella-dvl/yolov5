@@ -193,11 +193,11 @@ class DETRTransformer(nn.Module):
         # 1. take the maximum of A'_s in the second dimension
         max_values, inds = torch.max(attn_output_weights, 2)
         # 2. reshape the resulting vector to H_s x W_s
-        A_s = torch.reshape(max_values, (bs, h, w))
+        obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        A_s -= A_s.min(1, keepdim=True)[0]
-        A_s /= A_s.max(1, keepdim=True)[0]
-        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(A_s)  # G_s, A_s
+        obj_map -= obj_map.min(1, keepdim=True)[0]
+        obj_map /= obj_map.max(1, keepdim=True)[0]
+        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(obj_map)  # G_s, A_s
 
 
 class DETRTransformerEncoder(nn.Module):
@@ -342,15 +342,15 @@ class Transformer(nn.Module):
             src = self.conv(src)
         src = src + self.pos_embed(src)
 
-        memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
+        memory, attn_output_weights = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
         max_values, inds = torch.max(attn_output_weights, 2)
         # 2. reshape the resulting vector to H_s x W_s
-        A_s = torch.reshape(max_values, (bs, h, w))
+        obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        A_s -= A_s.min(1, keepdim=True)[0]
-        A_s /= A_s.max(1, keepdim=True)[0]
-        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(A_s)  # G_s, A_s
+        obj_map -= obj_map.min(1, keepdim=True)[0]
+        obj_map /= obj_map.max(1, keepdim=True)[0]
+        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(obj_map)  # G_s, A_s
 
 
 class TransformerEncoder(nn.Module):
@@ -515,7 +515,8 @@ class C3TR(nn.Module):
         
     def forward(self, x):
         x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
-        return x + self.m2(x)[0]
+        feat_map, obj_map = self.m2(x)
+        return x + feat_map, obj_map
 
 
 class C3DETRTR(nn.Module):
@@ -531,7 +532,8 @@ class C3DETRTR(nn.Module):
         
     def forward(self, x):
         x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
-        return x + self.m2(x)[0]
+        feat_map, obj_map = self.m2(x)
+        return x + feat_map, obj_map
 
 
 class C3SPP(C3):
