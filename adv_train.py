@@ -325,8 +325,8 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     elif adversarial:
         print("Domain-Adversarial training")
         (
-            source_loader,
-            source_dataset,
+            train_loader,
+            dataset,
             target_loader,
             target_dataset,
         ) = create_adv_dataloaders(
