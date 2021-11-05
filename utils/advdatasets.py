@@ -26,7 +26,7 @@ from PIL import Image, ImageOps, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterbox, mixup, random_perspective
+from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterbox, mixup, mixup_no_labels, random_perspective
 from utils.general import check_dataset, check_requirements, check_yaml, clean_str, segments2boxes, \
     xywh2xyxy, xywhn2xyxy, xyxy2xywhn, xyn2xy
 from utils.torch_utils import torch_distributed_zero_first
@@ -135,7 +135,13 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       pad=pad,
                                       image_weights=image_weights,
                                       prefix=prefix)
-    target_dataset = LoadImages(target_path, img_size=imgsz, stride=int(stride), auto=True)
+    target_dataset = LoadImagesNoLabels(target_path, imgsz, 
+                                      augment=False,  # augment images
+                                      hyp=hyp,  # augmentation hyperparameters
+                                      rect=rect,  # rectangular training
+                                      stride=int(stride),
+                                      image_weights=image_weights,
+                                      prefix=prefix)
 
     batch_size = min(batch_size, len(source_dataset), len(target_dataset))
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -152,7 +158,7 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                         num_workers=nw,
                         sampler=sampler,
                         pin_memory=True,
-                        collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
+                        collate_fn=LoadImagesNoLabels.collate_fn4 if quad else LoadImagesNoLabels.collate_fn)
     return source_dataloader, source_dataset, target_dataloader, target_dataset
 
 
@@ -688,6 +694,168 @@ class LoadImagesAndLabels(Dataset):
             l[:, 0] = i  # add target image index for build_targets()
 
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
+
+
+class LoadImagesNoLabels(Dataset):
+    # YOLOv5 train_loader/val_loader, loads images for domain-adversarialtraining
+    cache_version = 0.6  # dataset labels *.cache version
+
+    def __init__(self, path, img_size=640, augment=False, hyp=None, rect=False, image_weights=False,
+                 stride=32, prefix=''):
+        self.img_size = img_size
+        self.augment = augment
+        self.hyp = hyp
+        self.image_weights = image_weights
+        self.rect = False if image_weights else rect
+        self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
+        self.mosaic_border = [-img_size // 2, -img_size // 2]
+        self.stride = stride
+        self.path = path
+        self.albumentations = Albumentations() if augment else None
+
+        try:
+            f = []  # image files
+            for p in path if isinstance(path, list) else [path]:
+                p = Path(p)  # os-agnostic
+                if p.is_dir():  # dir
+                    f += glob.glob(str(p / '**' / '*.*'), recursive=True)
+                    # f = list(p.rglob('*.*'))  # pathlib
+                elif p.is_file():  # file
+                    with open(p, 'r') as t:
+                        t = t.read().strip().splitlines()
+                        parent = str(p.parent) + os.sep
+                        f += [x.replace('./', parent) if x.startswith('./') else x for x in t]  # local to global path
+                        # f += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
+                else:
+                    raise Exception(f'{prefix}{p} does not exist')
+            self.img_files = sorted([x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in IMG_FORMATS])
+            # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
+            assert self.img_files, f'{prefix}No images found'
+        except Exception as e:
+            raise Exception(f'{prefix}Error loading data from {path}: {e}\nSee {HELP_URL}')
+
+        # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
+        n = len(self.img_files)
+        self.n = n
+        self.indices = range(n)
+        self.imgs, self.img_npy = [None] * n, [None] * n
+        # if cache_images:
+        #     if cache_images == 'disk':
+        #         self.im_cache_dir = Path(Path(self.img_files[0]).parent.as_posix() + '_npy')
+        #         self.img_npy = [self.im_cache_dir / Path(f).with_suffix('.npy').name for f in self.img_files]
+        #         self.im_cache_dir.mkdir(parents=True, exist_ok=True)
+        #     gb = 0  # Gigabytes of cached images
+        #     self.img_hw0, self.img_hw = [None] * n, [None] * n
+        #     results = ThreadPool(NUM_THREADS).imap(lambda x: load_image(*x), zip(repeat(self), range(n)))
+        #     pbar = tqdm(enumerate(results), total=n)
+        #     for i, x in pbar:
+        #         if cache_images == 'disk':
+        #             if not self.img_npy[i].exists():
+        #                 np.save(self.img_npy[i].as_posix(), x[0])
+        #             gb += self.img_npy[i].stat().st_size
+        #         else:
+        #             self.imgs[i], self.img_hw0[i], self.img_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+        #             gb += self.imgs[i].nbytes
+        #         pbar.desc = f'{prefix}Caching images ({gb / 1E9:.1f}GB {cache_images})'
+        #     pbar.close()
+
+    def __len__(self):
+        return len(self.img_files)
+
+    # def __iter__(self):
+    #     self.count = -1
+    #     print('ran dataset iter')
+    #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
+    #     return self
+
+    def __getitem__(self, index):
+        index = self.indices[index]  # linear, shuffled, or image_weights
+
+        hyp = self.hyp
+        # mosaic = self.mosaic and random.random() < hyp['mosaic']
+        # if mosaic:
+        #     # Load mosaic
+        #     img, labels = load_mosaic(self, index)
+        #     shapes = None
+
+        #     # MixUp augmentation
+        #     if random.random() < hyp['mixup']:
+        #         img, labels = mixup_no_labels(img, *load_mosaic(self, random.randint(0, self.n - 1)))
+
+        # else:
+        # Load image
+        img, (h0, w0), (h, w) = load_image(self, index)
+
+        # Letterbox
+        shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
+        img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+        shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
+
+        if self.augment:
+            img, labels = random_perspective(img, (),
+                                                degrees=hyp['degrees'],
+                                                translate=hyp['translate'],
+                                                scale=hyp['scale'],
+                                                shear=hyp['shear'],
+                                                perspective=hyp['perspective'])
+
+        nl = 0  # number of labels
+        if nl:
+            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
+
+        if self.augment:
+            # Albumentations
+            img, labels = self.albumentations(img, labels)
+            nl = len(labels)  # update after albumentations
+
+            # HSV color-space
+            augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+
+            # Flip up-down
+            if random.random() < hyp['flipud']:
+                img = np.flipud(img)
+                if nl:
+                    labels[:, 2] = 1 - labels[:, 2]
+
+            # Flip left-right
+            if random.random() < hyp['fliplr']:
+                img = np.fliplr(img)
+                if nl:
+                    labels[:, 1] = 1 - labels[:, 1]
+
+            # Cutouts
+            # labels = cutout(img, labels, p=0.5)
+
+        # Convert
+        img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+        img = np.ascontiguousarray(img)
+
+        return torch.from_numpy(img), self.img_files[index], shapes
+
+    @staticmethod
+    def collate_fn(batch):
+        img, path, shapes = zip(*batch)  # transposed
+        return torch.stack(img, 0), path, shapes
+
+    @staticmethod
+    def collate_fn4(batch):
+        img, path, shapes = zip(*batch)  # transposed
+        n = len(shapes) // 4
+        img4, path4, shapes4 = [], [], path[:n], shapes[:n]
+
+        ho = torch.tensor([[0., 0, 0, 1, 0, 0]])
+        wo = torch.tensor([[0., 0, 1, 0, 0, 0]])
+        s = torch.tensor([[1, 1, .5, .5, .5, .5]])  # scale
+        for i in range(n):  # zidane torch.zeros(16,3,720,1280)  # BCHW
+            i *= 4
+            if random.random() < 0.5:
+                im = F.interpolate(img[i].unsqueeze(0).float(), scale_factor=2., mode='bilinear', align_corners=False)[
+                    0].type(img[i].type())
+            else:
+                im = torch.cat((torch.cat((img[i], img[i + 1]), 1), torch.cat((img[i + 2], img[i + 3]), 1)), 2)
+            img4.append(im)
+
+        return torch.stack(img4, 0), path4, shapes4
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------

@@ -425,7 +425,7 @@ class Discriminator(nn.Module):
         self.rev = GradientReversal()
 
         self.flatten = nn.Flatten()
-        self.linear1 = torch.nn.LazyLinear(512)
+        self.linear1 = nn.LazyLinear(512)
         self.linear2 = nn.Linear(512, 256)
         self.classifier = nn.Linear(256, 1)
     

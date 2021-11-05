@@ -37,7 +37,7 @@ from models.experimental import attempt_load
 from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
-from utils.datasets import create_dataloader
+from utils.datasets import LoadImages, create_dataloader
 from utils.pdatasets import added_pseudo_dataloader
 from utils.advdatasets import create_adv_dataloaders
 from utils.general import (
@@ -328,7 +328,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             train_loader,
             dataset,
             target_loader,
-            target_dataset,
+            target_dataset
         ) = create_adv_dataloaders(
             train_path,
             adv_path,
@@ -363,8 +363,9 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             quad=opt.quad,
             prefix=colorstr("train: "),
         )
-    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
-    nb = len(train_loader)  # number of batches
+    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class    
+    nb = min(len(train_loader), len(target_loader))  # number of batches
+
     assert (
         mlc < nc
     ), f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
@@ -431,7 +432,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_loss_dis = ComputeLossDis([256, 128, 256])
+    compute_loss_dis = ComputeLossDis(model, [256], batch_size)
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
         f"Using {train_loader.num_workers} dataloader workers\n"
@@ -463,7 +464,8 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         mloss = torch.zeros(3, device=device)  # mean losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
-        pbar = enumerate(train_loader)
+        # pbar = enumerate(train_loader)
+        pbar = enumerate(zip(train_loader, target_loader))
         LOGGER.info(
             ("\n" + "%10s" * 7)
             % ("Epoch", "gpu_mem", "box", "obj", "cls", "labels", "img_size")
@@ -471,15 +473,11 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
-        for i, (
-            imgs,
-            targets,
-            paths,
-            _,
-        ) in (
+        for i, ((source_imgs, source_targets, source_paths, _), (target_imgs, target_paths, _,)) in (
             pbar
         ):  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
+            imgs = torch.cat([source_imgs, target_imgs])
             imgs = (
                 imgs.to(device, non_blocking=True).float() / 255.0
             )  # uint8 to float32, 0-255 to 0.0-1.0
@@ -516,22 +514,27 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         imgs, size=ns, mode="bilinear", align_corners=False
                     )
 
+            domain_targets = torch.cat([torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])])
+            domain_targets = torch.unsqueeze(domain_targets, 1)
+
             # Forward
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
-                pred, pred_dis = model(imgs, gamma=gamma)  # forward
+                source_pred, source_pred_dis = model(imgs[:source_imgs.shape[0]], gamma=gamma)  # forward
+                target_pred, target_pred_dis = model(imgs[source_imgs.shape[0]:], gamma=gamma)  # forward
                 loss, loss_items = compute_loss(
-                    pred, targets.to(device)
+                    source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
+                pred_dis = torch.cat([pred_dis for pred_dis in source_pred_dis + target_pred_dis])
                 loss_dis = compute_loss_dis(
-                    pred_dis, target_domain.to(device)
-                )  # need to define target_domain (source, target)
+                    pred_dis, domain_targets.to(device)
+                ) 
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.0
-                total_loss = lambda1 * loss + lambda2 * loss_dis
+                total_loss = loss + loss_dis
 
             # Backward
             scaler.scale(total_loss).backward()
@@ -555,7 +558,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         f"{epoch}/{epochs - 1}",
                         mem,
                         *mloss,
-                        targets.shape[0],
+                        source_targets.shape[0],
                         imgs.shape[-1],
                     )
                 )
@@ -564,8 +567,8 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     ni,
                     model,
                     imgs,
-                    targets,
-                    paths,
+                    source_targets,
+                    source_paths,
                     plots,
                     opt.sync_bn,
                 )
