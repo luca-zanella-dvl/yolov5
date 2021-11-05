@@ -126,7 +126,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         lpd_imgsz = check_img_size(lpd_imgsz, s=lpd_stride)  # check image size
         lpd_ascii = is_ascii(lpd_names)  # names are ascii (use PIL for UTF-8) 
 
-    vehicles = ['car', 'motorcycle', 'bus', 'truck']
+    vehicles = ['car', 'motorcycle', 'truck']
 
     # Dataloader
     if webcam:
@@ -192,6 +192,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
         # Process predictions
         for i, det in enumerate(pred):  # detections per image
+            to_anonymize = []
+
             if webcam:  # batch_size >= 1
                 p, s, im0, frame = path[i], f'{i}: ', im0s[i].copy(), dataset.count
             else:
@@ -262,20 +264,32 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                             if classify:
                                 lpd_pred = apply_classifier(lpd_pred, lpd_modelc, veh_img, veh_im0)
 
+                            if all([lpd_det.nelement() > 0 for lpd_det in lpd_pred]):
                             # Process predictions
-                            for i, lpd_det in enumerate(lpd_pred):  # detections per image
-                                if len(lpd_det):
-                                    # Rescale boxes from veh_img_size to veh_im0 size
-                                    lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape).round()
+                                for i, lpd_det in enumerate(lpd_pred):  # detections per image
+                                        # Rescale boxes from veh_img_size to veh_im0 size
+                                        lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape).round()
 
-                                    for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
-                                        lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy().astype(np.int32)
-                                        sub_im = im0[bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2]]
-                                        sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                                        im0[
-                                            bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3],
-                                            bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2],
-                                        ] = sub_im
+                                        for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
+                                            lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy().astype(np.int32)
+                                            to_anonymize.append((bbox[1] + lp_bbox[1], bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0], bbox[0] + lp_bbox[2]))
+                                            # sub_im = im0[bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2]]
+                                            # sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                                            # im0[
+                                            #     bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3],
+                                            #     bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2],
+                                            # ] = sub_im
+                            else:
+                                to_anonymize.append((int((bbox[1] + bbox[3]) / 2), bbox[3], bbox[0], bbox[2]))
+                                # sub_im = im0[
+                                #     int((bbox[1] + bbox[3]) / 2) : bbox[3], 
+                                #     bbox[0] : bbox[2]
+                                # ]
+                                # sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                                # im0[
+                                #     int((bbox[1] + bbox[3]) / 2)  : bbox[3],
+                                #     bbox[0] : bbox[2],
+                                # ] = sub_im
 
                         elif label == 'head':
                             if bbox[3] > bbox[1] and bbox[2] > bbox[0]:
@@ -285,6 +299,14 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                                     bbox[1] : bbox[1] + sub_im.shape[0],
                                     bbox[0] : bbox[0] + sub_im.shape[1],
                                 ] = sub_im
+
+            for miny, maxy, minx, maxx in to_anonymize:
+                sub_im = im0[miny : maxy, minx : maxx]
+                sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
+                im0[
+                    miny : maxy,
+                    minx : maxx,
+                ] = sub_im
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
@@ -313,7 +335,7 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
-
+    
     if save_txt or save_img or anonymize:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         print(f"Results saved to {colorstr('bold', save_dir)}{s}")
