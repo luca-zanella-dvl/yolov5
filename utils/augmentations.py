@@ -275,6 +275,12 @@ def mixup(im, labels, im2, labels2):
     labels = np.concatenate((labels, labels2), 0)
     return im, labels
 
+def mixup_no_labels(im, im2, labels2):
+    # Applies MixUp augmentation https://arxiv.org/pdf/1710.09412.pdf
+    r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
+    im = (im * r + im2 * (1 - r)).astype(np.uint8)
+    return im
+
 
 def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio

@@ -12,7 +12,6 @@ import platform
 import sys
 from copy import deepcopy
 from pathlib import Path
-import numpy as np
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
@@ -117,10 +116,14 @@ class Model(nn.Module):
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
-            s = 256  # 2x min stride
+            s = 640  # 2x min stride
             m.inplace = self.inplace
+<<<<<<< HEAD
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
             check_anchor_order(m)  # must be in pixel-space (not grid-space)
+=======
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))[0]])  # forward
+>>>>>>> Fix domain-adversarial adaptation training
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
@@ -152,6 +155,10 @@ class Model(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False, gamma=0.):
         y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
             if 'Discriminator' in m.type:
                 num_channels = x.shape[1]
                 # need to define M which is composed by the output of the previous layer and attention
@@ -161,12 +168,7 @@ class Model(nn.Module):
                 obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                 weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
                 dis_out.append(m(weigh_feat_map))
-                continue                
-            if m.f != -1:  # if not from previous layer
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile:
-                self._profile_one_layer(m, x, dt)
-            if any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
+            elif any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
                 x, obj_map = m(x)  # run
             else:    
                 x = m(x)  # run
