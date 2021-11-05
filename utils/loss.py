@@ -224,7 +224,6 @@ class ComputeLoss:
 class ComputeLossDis:
     # Compute losses
     def __init__(self, w):
-        
         self.BCE1 = nn.BCEWithLogitsLoss(weight=1/w[0])
         self.BCE2 = nn.BCEWithLogitsLoss(weight=1/w[1])
         self.BCE3 = nn.BCEWithLogitsLoss(weight=1/w[2])

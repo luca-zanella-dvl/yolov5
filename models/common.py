@@ -420,13 +420,12 @@ class TransformerEncoderLayer(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, dim_feat_map):
+    def __init__(self):
         super().__init__()
-        self.rev = GradientReversal(),
-        
-        # need to strengthen the classification architecture
-        self.linear1 = nn.Linear(dim_feat_map, 512),
-        self.linear2 = nn.Linear(512, 256),
+        self.rev = GradientReversal()
+
+        self.linear1 = torch.nn.LazyLinear(512)
+        self.linear2 = nn.Linear(512, 256)
         self.classifier = nn.Linear(256, 1)
     
     def forward(self, x):
@@ -446,6 +445,7 @@ class GradientReversal(torch.nn.Module):
 
     def forward(self, x):
         return GradientReversalFunction.apply(x, self.lambda_)
+
 
 class GradientReversalFunction(Function):
     """
