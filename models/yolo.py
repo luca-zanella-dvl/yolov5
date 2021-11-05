@@ -147,10 +147,12 @@ class Model(nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
             if 'Discriminator' in m.type:
-                num_channels = x.shape[1]
+                num_channels = torch.tensor(x.shape[1])
                 # need to define M which is composed by the output of the previous layer and attention
                 # NxHxW to Nx1xHxW
                 obj_map = torch.unsqueeze(obj_map, 1)
+                if obj_map.get_device() != -1:
+                    num_channels = num_channels.to(obj_map.get_device()) 
                 # Nx1xHxW to Nx3xHxW
                 obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                 weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
