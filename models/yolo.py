@@ -107,9 +107,9 @@ class Model(nn.Module):
         # Build strides, anchors
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
-            s = 256  # 2x min stride
+            s = 640  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))[0]])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
@@ -120,37 +120,49 @@ class Model(nn.Module):
         self.info()
         LOGGER.info('')
 
-    def forward(self, x, augment=False, profile=False, visualize=False):
+    def forward(self, x, augment=False, profile=False, visualize=False, gamma=0.):
         if augment:
-            return self._forward_augment(x)  # augmented inference, None
-        return self._forward_once(x, profile, visualize)  # single-scale inference, train
+            return self._forward_augment(x, gamma=gamma)  # augmented inference, None
+        return self._forward_once(x, profile, visualize, gamma)  # single-scale inference, train
 
-    def _forward_augment(self, x):
+    def _forward_augment(self, x, gamma=0.):
         img_size = x.shape[-2:]  # height, width
         s = [1, 0.83, 0.67]  # scales
         f = [None, 3, None]  # flips (2-ud, 3-lr)
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
-            yi = self._forward_once(xi)[0]  # forward
+            yi = self._forward_once(xi, gamma=gamma)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
 
-    def _forward_once(self, x, profile=False, visualize=False):
-        y, dt = [], []  # outputs
+    def _forward_once(self, x, profile=False, visualize=False, gamma=0.):
+        y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
+            if 'Discriminator' in m.type:
+                num_channels = x.shape[1]
+                # need to define M which is composed by the output of the previous layer and attention
+                # NxHxW to Nx1xHxW
+                obj_map = torch.unsqueeze(obj_map, 1)
+                # Nx1xHxW to Nx3xHxW
+                obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
+                weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
+                dis_out.append(m(weigh_feat_map))
+            elif any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
+                x, obj_map = m(x)  # run
+            else:    
+                x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x
+        return x if not dis_out else (x, dis_out)
 
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
@@ -263,13 +275,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                 BottleneckCSP, C3, C3TR, C3SPP, C3Ghost]:
+                 BottleneckCSP, C3, C3TR, C3DETRTR, C3SPP, C3Ghost]:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3TR, C3Ghost]:
+            if m in [BottleneckCSP, C3, C3TR, C3DETRTR, C3Ghost]:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:
@@ -284,14 +296,20 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        # elif m is Discriminator:
+            # bs, c, h, w = ch[f][0].shape
+            # dim_feat_map = c*h*w
+            # args[0] = dim_feat_map
         else:
             c2 = ch[f]
 
         m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
-        np = sum([x.numel() for x in m_.parameters()])  # number params
-        m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        LOGGER.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n_, np, t, args))  # print
+        # np = sum([x.numel() for x in m_.parameters()])  # number params
+        # m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
+        m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
+        # LOGGER.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n_, t, args))  # print
+        LOGGER.info('%3s%18s%3s  %-40s%-30s' % (i, f, n_, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
