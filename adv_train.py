@@ -566,7 +566,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     "on_train_batch_end",
                     ni,
                     model,
-                    imgs,
+                    source_imgs.float().to(device),
                     source_targets,
                     source_paths,
                     plots,
