@@ -120,26 +120,26 @@ class Model(nn.Module):
         self.info()
         LOGGER.info('')
 
-    def forward(self, x, augment=False, profile=False, visualize=False, gamma=0.):
+    def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False):
         if augment:
-            return self._forward_augment(x, gamma=gamma)  # augmented inference, None
-        return self._forward_once(x, profile, visualize, gamma)  # single-scale inference, train
+            return self._forward_augment(x, gamma=gamma, validation=validation)  # augmented inference, None
+        return self._forward_once(x, profile, visualize, gamma, validation=validation)  # single-scale inference, train
 
-    def _forward_augment(self, x, gamma=0.):
+    def _forward_augment(self, x, gamma=0., validation=False):
         img_size = x.shape[-2:]  # height, width
         s = [1, 0.83, 0.67]  # scales
         f = [None, 3, None]  # flips (2-ud, 3-lr)
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
-            yi = self._forward_once(xi, gamma=gamma)[0]  # forward
+            yi = self._forward_once(xi, gamma=gamma, validation=validation)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
 
-    def _forward_once(self, x, profile=False, visualize=False, gamma=0.):
+    def _forward_once(self, x, profile=False, visualize=False, gamma=0., validation=False):
         y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -147,19 +147,20 @@ class Model(nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
             if 'Discriminator' in m.type:
-                num_channels = torch.tensor(x.shape[1])
-                # need to define M which is composed by the output of the previous layer and attention
-                # NxHxW to Nx1xHxW
-                obj_map = torch.unsqueeze(obj_map, 1)
-                if obj_map.get_device() != -1:
-                    num_channels = num_channels.to(obj_map.get_device()) 
-                # Nx1xHxW to Nx3xHxW
-                obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
-                weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
-                dis_out.append(m(weigh_feat_map))
+                if not validation:
+                    num_channels = torch.tensor(x.shape[1])
+                    # need to define M which is composed by the output of the previous layer and attention
+                    # NxHxW to Nx1xHxW
+                    obj_map = torch.unsqueeze(obj_map, 1)
+                    if obj_map.get_device() != -1:
+                        num_channels = num_channels.to(obj_map.get_device()) 
+                    # Nx1xHxW to Nx3xHxW
+                    obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
+                    weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
+                    dis_out.append(m(weigh_feat_map))
             elif any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
                 x, obj_map = m(x)  # run
-            else:    
+            else:
                 x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
             if visualize:

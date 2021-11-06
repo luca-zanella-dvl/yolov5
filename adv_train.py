@@ -809,6 +809,9 @@ def parse_opt(known=False):
         help="Number of layers to freeze. backbone=10, all=24",
     )
     parser.add_argument(
+        '--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)'
+    )
+    parser.add_argument(
         "--pseudo", action="store_true", help="semi-supervised learning"
     )
     parser.add_argument(
