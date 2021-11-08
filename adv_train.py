@@ -324,12 +324,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         )
     elif adversarial:
         print("Domain-Adversarial training")
-        (
-            train_loader,
-            dataset,
-            target_loader,
-            target_dataset
-        ) = create_adv_dataloaders(
+        (train_loader, dataset, target_loader, target_dataset) = create_adv_dataloaders(
             train_path,
             adv_path,
             imgsz,
@@ -363,7 +358,8 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             quad=opt.quad,
             prefix=colorstr("train: "),
         )
-    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class    
+    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
+    # len(dataset) / batch_size
     nb = min(len(train_loader), len(target_loader))  # number of batches
 
     assert (
@@ -439,7 +435,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f"Starting training for {epochs} epochs..."
     )
-    max_iterations = nb * epochs
+    max_iterations = nb * (epochs - start_epoch)
     for epoch in range(
         start_epoch, epochs
     ):  # epoch ------------------------------------------------------------------
@@ -473,7 +469,14 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
-        for i, ((source_imgs, source_targets, source_paths, _), (target_imgs, target_paths, _,)) in (
+        for i, (
+            (source_imgs, source_targets, source_paths, _),
+            (
+                target_imgs,
+                target_paths,
+                _,
+            ),
+        ) in (
             pbar
         ):  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
@@ -514,22 +517,28 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         imgs, size=ns, mode="bilinear", align_corners=False
                     )
 
-            domain_targets = torch.cat([torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])])
+            domain_targets = torch.cat(
+                [torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])]
+            )
             domain_targets = torch.unsqueeze(domain_targets, 1)
 
             # Forward
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
-                source_pred, source_pred_dis = model(imgs[:source_imgs.shape[0]], gamma=gamma)  # forward
-                target_pred, target_pred_dis = model(imgs[source_imgs.shape[0]:], gamma=gamma)  # forward
+                source_pred, source_pred_dis = model(
+                    imgs[: source_imgs.shape[0]], gamma=gamma
+                )  # forward
+                target_pred, target_pred_dis = model(
+                    imgs[source_imgs.shape[0] :], gamma=gamma
+                )  # forward
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
-                pred_dis = torch.cat([pred_dis for pred_dis in source_pred_dis + target_pred_dis])
-                loss_dis = compute_loss_dis(
-                    pred_dis, domain_targets.to(device)
-                ) 
+                pred_dis = torch.cat(
+                    [pred_dis for pred_dis in source_pred_dis + target_pred_dis]
+                )
+                loss_dis = compute_loss_dis(pred_dis, domain_targets.to(device))
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -807,6 +816,12 @@ def parse_opt(known=False):
         type=int,
         default=0,
         help="Number of layers to freeze. backbone=10, all=24",
+    )
+    parser.add_argument(
+        "--save-period",
+        type=int,
+        default=-1,
+        help="Save checkpoint every x epochs (disabled if < 1)",
     )
     parser.add_argument(
         "--pseudo", action="store_true", help="semi-supervised learning"
