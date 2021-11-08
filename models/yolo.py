@@ -152,7 +152,6 @@ class Model(nn.Module):
             if 'Discriminator' in m.type:
                 if not validation:
                     num_channels = torch.tensor(x.shape[1])
-                    # need to define M which is composed by the output of the previous layer and attention
                     # NxHxW to Nx1xHxW
                     obj_map = torch.unsqueeze(obj_map, 1)
                     if obj_map.get_device() != -1:
@@ -302,10 +301,6 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
-        # elif m is Discriminator:
-            # bs, c, h, w = ch[f][0].shape
-            # dim_feat_map = c*h*w
-            # args[0] = dim_feat_map
         else:
             c2 = ch[f]
 
