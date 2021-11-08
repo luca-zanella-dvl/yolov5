@@ -382,7 +382,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_loss_dis = ComputeLossDis(model, [256], batch_size)
+    compute_loss_dis = ComputeLossDis()
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
         f"Using {train_loader.num_workers} dataloader workers\n"

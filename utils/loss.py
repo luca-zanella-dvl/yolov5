@@ -234,22 +234,11 @@ class ComputeLoss:
         return tcls, tbox, indices, anch
 
 class ComputeLossDis:
-    # Compute losses
-    def __init__(self, model, w, batch_size):
-        device = next(model.parameters()).device  # get model device
-
-
-        w1 = torch.tensor(1/w[0], device=device)
-        # w2 = torch.tensor(1/w[1]).repeat(batch_size)
-        # w3 = torch.tensor(1/w[2]).repeat(batch_size)
-
-        self.BCE1 = nn.BCEWithLogitsLoss(pos_weight=w1)
-        # self.BCE2 = nn.BCEWithLogitsLoss(weight=w2)
-        # self.BCE3 = nn.BCEWithLogitsLoss(weight=w3)
+    # Compute discriminator loss
+    def __init__(self):
+        self.BCE = nn.BCEWithLogitsLoss()
 
     def __call__(self, p, targets):  # predictions, targets
-        loss1 = self.BCE1(p, targets)
-        # loss2 = self.BCE2(p[1], targets)
-        # loss3 = self.BCE3(p[2], targets)
+        loss = self.BCE(p, targets)
 
-        return loss1 #+ loss2 + loss3
+        return loss
