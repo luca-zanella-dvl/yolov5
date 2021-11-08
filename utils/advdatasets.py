@@ -123,9 +123,10 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
 
 def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0, 
                             rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix=''):
+    half_batch = batch_size // 2
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache.
     with torch_distributed_zero_first(rank):
-        source_dataset = LoadImagesAndLabels(source_path, imgsz, batch_size,
+        source_dataset = LoadImagesAndLabels(source_path, imgsz, half_batch,
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
@@ -143,18 +144,18 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       image_weights=image_weights,
                                       prefix=prefix)
 
-    batch_size = min(batch_size, len(source_dataset), len(target_dataset))
-    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, workers])  # number of workers
+    half_batch = min(half_batch, len(source_dataset), len(target_dataset))
+    nw = min([os.cpu_count(), half_batch if half_batch > 1 else 0, workers])  # number of workers
     sampler = torch.utils.data.distributed.DistributedSampler(source_dataset) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
     source_dataloader = loader(source_dataset,
-                        batch_size=batch_size,
+                        batch_size=half_batch,
                         num_workers=nw,
                         sampler=sampler,
                         pin_memory=True,
                         collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
     target_dataloader = loader(target_dataset,
-                        batch_size=batch_size,
+                        batch_size=half_batch,
                         num_workers=nw,
                         sampler=sampler,
                         pin_memory=True,
