@@ -38,7 +38,6 @@ from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
 from utils.datasets import LoadImages, create_dataloader
-from utils.pdatasets import added_pseudo_dataloader
 from utils.advdatasets import create_adv_dataloaders
 from utils.general import (
     labels_to_class_weights,
@@ -100,8 +99,6 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         nosave,
         workers,
         freeze,
-        pseudo,
-        adversarial,
         delta,
     ) = (
         Path(opt.save_dir),
@@ -117,8 +114,6 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         opt.nosave,
         opt.workers,
         opt.freeze,
-        opt.pseudo,
-        opt.adversarial,
         opt.delta,
     )
 
@@ -160,11 +155,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
-    train_path, val_path = data_dict["train"], data_dict["val"]
-    if pseudo:
-        pseudo_path = data_dict["pseudo"]
-    if adversarial:
-        adv_path = data_dict["adv"]
+    train_path, val_path, adv_path = data_dict["train"], data_dict["val"], data_dict["adv"]
     nc = 1 if single_cls else int(data_dict["nc"])  # number of classes
     names = (
         ["item"] if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]
@@ -303,61 +294,24 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         LOGGER.info("Using SyncBatchNorm()")
 
     # Trainloader
-    if pseudo:
-        print("Using train labels with pseudo labels")
-        train_loader, dataset = added_pseudo_dataloader(
-            train_path,
-            pseudo_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
-    elif adversarial:
-        print("Domain-Adversarial training")
-        (train_loader, dataset, target_loader, target_dataset) = create_adv_dataloaders(
-            train_path,
-            adv_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
-    else:
-        train_loader, dataset = create_dataloader(
-            train_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
+    print("Domain-Adversarial training")
+    (train_loader, dataset, target_loader, target_dataset) = create_adv_dataloaders(
+        train_path,
+        adv_path,
+        imgsz,
+        batch_size // WORLD_SIZE,
+        gs,
+        single_cls,
+        hyp=hyp,
+        augment=True,
+        cache=opt.cache,
+        rect=opt.rect,
+        rank=RANK,
+        workers=workers,
+        image_weights=opt.image_weights,
+        quad=opt.quad,
+        prefix=colorstr("train: "),
+    )
     mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
     # len(dataset) / batch_size
     nb = min(len(train_loader), len(target_loader))  # number of batches
@@ -471,11 +425,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         optimizer.zero_grad()
         for i, (
             (source_imgs, source_targets, source_paths, _),
-            (
-                target_imgs,
-                target_paths,
-                _,
-            ),
+            (target_imgs, target_paths, _),
         ) in (
             pbar
         ):  # batch -------------------------------------------------------------
@@ -822,12 +772,6 @@ def parse_opt(known=False):
         type=int,
         default=-1,
         help="Save checkpoint every x epochs (disabled if < 1)",
-    )
-    parser.add_argument(
-        "--pseudo", action="store_true", help="semi-supervised learning"
-    )
-    parser.add_argument(
-        "--adversarial", action="store_true", help="domain-adversarial adaptation"
     )
     parser.add_argument(
         "--delta",
