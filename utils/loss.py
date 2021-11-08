@@ -238,11 +238,12 @@ class ComputeLossDis:
     def __init__(self, model, w, batch_size):
         device = next(model.parameters()).device  # get model device
 
-        w1 = torch.tensor(1/w[0], device=device).repeat(batch_size)
+
+        w1 = torch.tensor(1/w[0], device=device)
         # w2 = torch.tensor(1/w[1]).repeat(batch_size)
         # w3 = torch.tensor(1/w[2]).repeat(batch_size)
 
-        self.BCE1 = nn.BCEWithLogitsLoss(weight=w1)
+        self.BCE1 = nn.BCEWithLogitsLoss(pos_weight=w1)
         # self.BCE2 = nn.BCEWithLogitsLoss(weight=w2)
         # self.BCE3 = nn.BCEWithLogitsLoss(weight=w3)
 
