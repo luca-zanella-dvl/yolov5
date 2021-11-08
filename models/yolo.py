@@ -148,7 +148,7 @@ class Model(nn.Module):
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
 
-    def _forward_once(self, x, profile=False, visualize=False, gamma=0.):
+    def _forward_once(self, x, profile=False, visualize=False, gamma=0., validation=False):
         y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -299,10 +299,6 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
-        # elif m is Discriminator:
-            # bs, c, h, w = ch[f][0].shape
-            # dim_feat_map = c*h*w
-            # args[0] = dim_feat_map
         else:
             c2 = ch[f]
 

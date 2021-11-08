@@ -262,7 +262,7 @@ class DETRTransformerEncoderLayer(nn.Module):
     ):
         # q H_sW_sxD
         # k H_sW_sxD
-        # v H_sW_sxC_s C_s = D
+        # v H_sW_sxC_s
         q = k = self.with_pos_embed(src, pos)  # encoder input
         # G'_s, A'_s
         attn_output, attn_output_weights = self.self_attn(
@@ -428,21 +428,22 @@ class TransformerEncoderLayer(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, c1, c2, activation="relu"):
         super().__init__()
         self.rev = GradientReversal()
 
         self.flatten = nn.Flatten()
-        self.linear1 = nn.LazyLinear(512)
-        self.linear2 = nn.Linear(512, 256)
-        self.classifier = nn.Linear(256, 1)
+        self.linear1 = nn.LazyLinear(c1)
+        self.linear2 = nn.Linear(c1, c2)
+        self.classifier = nn.Linear(c2, 1)
+        self.activation = _get_activation_fn(activation)
     
     def forward(self, x):
         x = self.rev(x)
         
         x = self.flatten(x)
-        x = F.relu(self.linear1(x))
-        x = F.relu(self.linear2(x))
+        x = self.activation(self.linear1(x))
+        x = self.activation(self.linear2(x))
         x = self.classifier(x)
         return x
 
