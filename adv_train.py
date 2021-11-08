@@ -485,9 +485,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
-                pred_dis = torch.cat(
-                    [pred_dis for pred_dis in source_pred_dis + target_pred_dis]
-                )
+                pred_dis = torch.cat(source_pred_dis + target_pred_dis)
                 loss_dis = compute_loss_dis(pred_dis, domain_targets.to(device))
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
