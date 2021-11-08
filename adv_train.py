@@ -38,7 +38,6 @@ from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
 from utils.datasets import LoadImages, create_dataloader
-from utils.pdatasets import added_pseudo_dataloader
 from utils.advdatasets import create_adv_dataloaders
 from utils.general import (
     labels_to_class_weights,
@@ -100,8 +99,6 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         nosave,
         workers,
         freeze,
-        pseudo,
-        adversarial,
         delta,
     ) = (
         Path(opt.save_dir),
@@ -117,8 +114,6 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         opt.nosave,
         opt.workers,
         opt.freeze,
-        opt.pseudo,
-        opt.adversarial,
         opt.delta,
     )
 
@@ -160,11 +155,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
-    train_path, val_path = data_dict["train"], data_dict["val"]
-    if pseudo:
-        pseudo_path = data_dict["pseudo"]
-    if adversarial:
-        adv_path = data_dict["adv"]
+    train_path, val_path, adv_path = data_dict["train"], data_dict["val"], data_dict["adv"]
     nc = 1 if single_cls else int(data_dict["nc"])  # number of classes
     names = (
         ["item"] if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]
@@ -303,67 +294,26 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         LOGGER.info("Using SyncBatchNorm()")
 
     # Trainloader
-    if pseudo:
-        print("Using train labels with pseudo labels")
-        train_loader, dataset = added_pseudo_dataloader(
-            train_path,
-            pseudo_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
-    elif adversarial:
-        print("Domain-Adversarial training")
-        (
-            train_loader,
-            dataset,
-            target_loader,
-            target_dataset
-        ) = create_adv_dataloaders(
-            train_path,
-            adv_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
-    else:
-        train_loader, dataset = create_dataloader(
-            train_path,
-            imgsz,
-            batch_size // WORLD_SIZE,
-            gs,
-            single_cls,
-            hyp=hyp,
-            augment=True,
-            cache=opt.cache,
-            rect=opt.rect,
-            rank=RANK,
-            workers=workers,
-            image_weights=opt.image_weights,
-            quad=opt.quad,
-            prefix=colorstr("train: "),
-        )
-    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class    
+    print("Domain-Adversarial training")
+    (train_loader, dataset, target_loader, target_dataset) = create_adv_dataloaders(
+        train_path,
+        adv_path,
+        imgsz,
+        batch_size // WORLD_SIZE,
+        gs,
+        single_cls,
+        hyp=hyp,
+        augment=True,
+        cache=opt.cache,
+        rect=opt.rect,
+        rank=RANK,
+        workers=workers,
+        image_weights=opt.image_weights,
+        quad=opt.quad,
+        prefix=colorstr("train: "),
+    )
+    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
+    # len(dataset) / batch_size
     nb = min(len(train_loader), len(target_loader))  # number of batches
 
     assert (
@@ -432,14 +382,14 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_loss_dis = ComputeLossDis(model, [256], batch_size)
+    compute_loss_dis = ComputeLossDis()
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
         f"Using {train_loader.num_workers} dataloader workers\n"
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f"Starting training for {epochs} epochs..."
     )
-    max_iterations = nb * epochs
+    max_iterations = nb * (epochs - start_epoch)
     for epoch in range(
         start_epoch, epochs
     ):  # epoch ------------------------------------------------------------------
@@ -473,7 +423,10 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
-        for i, ((source_imgs, source_targets, source_paths, _), (target_imgs, target_paths, _,)) in (
+        for i, (
+            (source_imgs, source_targets, source_paths, _),
+            (target_imgs, target_paths, _),
+        ) in (
             pbar
         ):  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
@@ -514,22 +467,26 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         imgs, size=ns, mode="bilinear", align_corners=False
                     )
 
-            domain_targets = torch.cat([torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])])
+            domain_targets = torch.cat(
+                [torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])]
+            )
             domain_targets = torch.unsqueeze(domain_targets, 1)
 
             # Forward
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
-                source_pred, source_pred_dis = model(imgs[:source_imgs.shape[0]], gamma=gamma)  # forward
-                target_pred, target_pred_dis = model(imgs[source_imgs.shape[0]:], gamma=gamma)  # forward
+                source_pred, source_pred_dis = model(
+                    imgs[: source_imgs.shape[0]], gamma=gamma
+                )  # forward
+                target_pred, target_pred_dis = model(
+                    imgs[source_imgs.shape[0] :], gamma=gamma
+                )  # forward
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
-                pred_dis = torch.cat([pred_dis for pred_dis in source_pred_dis + target_pred_dis])
-                loss_dis = compute_loss_dis(
-                    pred_dis, domain_targets.to(device)
-                ) 
+                pred_dis = torch.cat(source_pred_dis + target_pred_dis)
+                loss_dis = compute_loss_dis(pred_dis, domain_targets.to(device))
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -566,7 +523,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     "on_train_batch_end",
                     ni,
                     model,
-                    imgs,
+                    source_imgs.float().to(device),
                     source_targets,
                     source_paths,
                     plots,
@@ -809,10 +766,10 @@ def parse_opt(known=False):
         help="Number of layers to freeze. backbone=10, all=24",
     )
     parser.add_argument(
-        "--pseudo", action="store_true", help="semi-supervised learning"
-    )
-    parser.add_argument(
-        "--adversarial", action="store_true", help="domain-adversarial adaptation"
+        "--save-period",
+        type=int,
+        default=-1,
+        help="Save checkpoint every x epochs (disabled if < 1)",
     )
     parser.add_argument(
         "--delta",
