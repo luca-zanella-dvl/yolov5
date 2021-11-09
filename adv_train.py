@@ -155,7 +155,11 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(data)  # check if None
-    train_path, val_path, adv_path = data_dict["train"], data_dict["val"], data_dict["adv"]
+    train_path, val_path, adv_path = (
+        data_dict["train"],
+        data_dict["val"],
+        data_dict["adv"],
+    )
     nc = 1 if single_cls else int(data_dict["nc"])  # number of classes
     names = (
         ["item"] if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]
@@ -382,7 +386,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_domain_loss = ComputeDomainLoss()
+    compute_domain_loss = ComputeDomainLoss(model)
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
         f"Using {train_loader.num_workers} dataloader workers\n"
@@ -412,6 +416,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
         mloss = torch.zeros(3, device=device)  # mean losses
+        madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
@@ -480,17 +485,26 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
-
-                source_domain_pred = torch.cat(source_domain_pred)
-                target_domain_pred = torch.cat(target_domain_pred)
-                domain_pred = torch.cat((source_domain_pred, target_domain_pred)) 
-
-                domain_targets = torch.cat(
-                    [torch.ones(source_domain_pred.shape[0]), torch.zeros(target_domain_pred.shape[0])]
+                
+                domain_loss, domain_loss_items = compute_domain_loss(
+                    source_domain_pred, target_domain_pred
                 )
-                domain_targets = torch.unsqueeze(domain_targets, 1)
 
-                domain_loss = compute_domain_loss(domain_pred, domain_targets.to(device))
+                # source_domain_pred = torch.cat(source_domain_pred)
+                # target_domain_pred = torch.cat(target_domain_pred)
+                # domain_pred = torch.cat((source_domain_pred, target_domain_pred))
+
+                # domain_targets = torch.cat(
+                #     [
+                #         torch.zeros(source_domain_pred.shape[0]),
+                #         torch.ones(target_domain_pred.shape[0]),
+                #     ]
+                # )
+                # domain_targets = torch.unsqueeze(domain_targets, 1)
+
+                # domain_loss = compute_domain_loss(
+                #     domain_pred, domain_targets.to(device)
+                # )
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -512,13 +526,15 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             # Log
             if RANK in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
                 mem = f"{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G"  # (GB)
                 pbar.set_description(
-                    ("%10s" * 2 + "%10.4g" * 5)
+                    ("%10s" * 2 + "%10.4g" * 8)
                     % (
                         f"{epoch}/{epochs - 1}",
                         mem,
                         *mloss,
+                        *madvloss,
                         source_targets.shape[0],
                         imgs.shape[-1],
                     )
@@ -566,7 +582,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             )  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr
+            log_vals = list(mloss) + list(results) + lr + list(madvloss)
             callbacks.run("on_fit_epoch_end", log_vals, epoch, best_fitness, fi)
 
             # Save model
@@ -641,7 +657,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     if is_coco:
                         callbacks.run(
                             "on_fit_epoch_end",
-                            list(mloss) + list(results) + lr,
+                            list(mloss) + list(results) + lr + list(madvloss),
                             epoch,
                             best_fitness,
                             fi,
@@ -776,11 +792,35 @@ def parse_opt(known=False):
         help="Save checkpoint every x epochs (disabled if < 1)",
     )
     parser.add_argument(
+        "--local_rank", type=int, default=-1, help="DDP parameter, do not modify"
+    )
+    parser.add_argument(
         "--delta",
         type=float,
         default=5.0,
         help="Smoothness of the domain adaptation change",
     )
+
+    # Weights & Biases arguments
+    parser.add_argument("--entity", default=None, help="W&B: Entity")
+    parser.add_argument(
+        "--upload_dataset",
+        action="store_true",
+        help="W&B: Upload dataset as artifact table",
+    )
+    parser.add_argument(
+        "--bbox_interval",
+        type=int,
+        default=-1,
+        help="W&B: Set bounding-box image logging interval",
+    )
+    parser.add_argument(
+        "--artifact_alias",
+        type=str,
+        default="latest",
+        help="W&B: Version of dataset artifact to use",
+    )
+
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
