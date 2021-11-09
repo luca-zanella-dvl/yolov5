@@ -56,6 +56,8 @@ class Loggers():
             'x/lr0',
             'x/lr1',
             'x/lr2']  # params
+        self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large']  # adversarial train loss
+        self.keys += self.adv_keys
         self.best_keys = ['best/epoch', 'best/precision', 'best/recall', 'best/mAP_0.5', 'best/mAP_0.5:0.95']
         for k in LOGGERS:
             setattr(self, k, None)  # init empty logger dictionary

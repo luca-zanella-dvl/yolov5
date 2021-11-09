@@ -428,9 +428,9 @@ class TransformerEncoderLayer(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, c1, c2, activation="relu"):
+    def __init__(self, c1, c2, lambda_=0.1, activation="relu"):
         super().__init__()
-        self.rev = GradientReversal()
+        self.rev = GradientReversal(lambda_=lambda_)
 
         self.flatten = nn.Flatten()
         self.linear1 = nn.LazyLinear(c1)

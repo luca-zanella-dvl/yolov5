@@ -233,12 +233,70 @@ class ComputeLoss:
 
         return tcls, tbox, indices, anch
 
+
 class ComputeDomainLoss:
-    # Compute domain loss
-    def __init__(self):
-        self.BCE = nn.BCEWithLogitsLoss()
+    # Compute domain losses
+    def __init__(self, model):
+        h = model.hyp  # hyperparameters
 
-    def __call__(self, p, targets):  # predictions, targets
-        loss = self.BCE(p, targets)
+        # Define criteria
+        BCE = nn.BCEWithLogitsLoss()
+        self.BCE, self.hyp = BCE, h 
 
-        return loss
+        # BCEsmall = nn.BCEWithLogitsLoss(device=device)
+        # BCEmedium = nn.BCEWithLogitsLoss(device=device)
+        # BCElarge = nn.BCEWithLogitsLoss(device=device)
+
+        # self.BCEsmall, self.BCEmedium, self.BCElarge, self.hyp = BCEsmall, BCEmedium, BCElarge, h
+
+    def __call__(self, sp, tp):  # source predictions, target predictions
+        device = sp[0].device
+
+        losses = [torch.zeros(1, device=device) for _ in range(len(sp))]
+        targets = self.build_targets(sp, tp)  # targets
+
+        # Losses
+        for i in range(len(sp)):
+            losses[i] += self.BCE(torch.cat((sp[i], tp[i])), targets.to(device))
+            # losses[i] *= self.hyp['domain']
+
+        bs = sp[0].shape[0] * 2  # batch size
+
+        return sum(losses) * bs, torch.cat(losses).detach()
+
+        # lsmall, lmedium, llarge = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+        # tsmall, tmedium, tlarge = self.build_targets(sp, tp)  # targets
+
+        # # Losses
+        # lsmall += self.BCEsmall(torch.cat((sp[0], tp[0])), tsmall)
+        # lmedium += self.BCEmedium(torch.cat((sp[1], tp[1])), tmedium)
+        # llarge += self.BCElarge(torch.cat((sp[2], tp[2])), tlarge)
+            
+        # # lsmall *= self.hyp['small']
+        # # lmedium *= self.hyp['medium']
+        # # llarge *= self.hyp['large']
+        # bs = sp[0].shape[0] * 2  # batch size
+
+        # return (lsmall + lmedium + llarge) * bs, torch.cat((lsmall, lmedium, llarge)).detach()
+
+    def build_targets(self, sp, tp):
+        # Build targets for compute_domain_loss()
+        t = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
+        t = torch.unsqueeze(t, 1)
+        return t
+
+        # tsmall = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
+        # tmedium = torch.cat((torch.zeros(sp[1].shape[0]), torch.ones(tp[1].shape[0])))
+        # tlarge = torch.cat((torch.zeros(sp[2].shape[0]), torch.ones(tp[2].shape[0])))
+        
+        # return tsmall, tmedium, tlarge
+
+# class ComputeDomainLoss:
+#     # Compute domain loss
+#     def __init__(self):
+#         self.BCE = nn.BCEWithLogitsLoss()
+
+#     def __call__(self, p, targets):  # predictions, targets
+#         loss = self.BCE(p, targets)
+
+#         return loss
