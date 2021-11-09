@@ -233,8 +233,8 @@ class ComputeLoss:
 
         return tcls, tbox, indices, anch
 
-class ComputeLossDis:
-    # Compute discriminator loss
+class ComputeDomainLoss:
+    # Compute domain loss
     def __init__(self):
         self.BCE = nn.BCEWithLogitsLoss()
 

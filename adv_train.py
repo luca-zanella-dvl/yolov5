@@ -61,7 +61,7 @@ from utils.general import (
     methods,
 )
 from utils.downloads import attempt_download
-from utils.loss import ComputeLoss, ComputeLossDis
+from utils.loss import ComputeLoss, ComputeDomainLoss
 from utils.plots import plot_labels, plot_evolve
 from utils.torch_utils import (
     EarlyStopping,
@@ -382,7 +382,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_loss_dis = ComputeLossDis()
+    compute_domain_loss = ComputeDomainLoss()
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
         f"Using {train_loader.num_workers} dataloader workers\n"
@@ -467,31 +467,35 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         imgs, size=ns, mode="bilinear", align_corners=False
                     )
 
-            domain_targets = torch.cat(
-                [torch.ones(source_imgs.shape[0]), torch.zeros(target_imgs.shape[0])]
-            )
-            domain_targets = torch.unsqueeze(domain_targets, 1)
-
             # Forward
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
-                source_pred, source_pred_dis = model(
+                source_pred, source_domain_pred = model(
                     imgs[: source_imgs.shape[0]], gamma=gamma
                 )  # forward
-                target_pred, target_pred_dis = model(
+                target_pred, target_domain_pred = model(
                     imgs[source_imgs.shape[0] :], gamma=gamma
                 )  # forward
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
-                pred_dis = torch.cat(source_pred_dis + target_pred_dis)
-                loss_dis = compute_loss_dis(pred_dis, domain_targets.to(device))
+
+                source_domain_pred = torch.cat(source_domain_pred)
+                target_domain_pred = torch.cat(target_domain_pred)
+                domain_pred = torch.cat((source_domain_pred, target_domain_pred)) 
+
+                domain_targets = torch.cat(
+                    [torch.ones(source_domain_pred.shape[0]), torch.zeros(target_domain_pred.shape[0])]
+                )
+                domain_targets = torch.unsqueeze(domain_targets, 1)
+
+                domain_loss = compute_domain_loss(domain_pred, domain_targets.to(device))
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.0
-                total_loss = loss + loss_dis
+                total_loss = loss + domain_loss
 
             # Backward
             scaler.scale(total_loss).backward()
