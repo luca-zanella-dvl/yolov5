@@ -45,6 +45,37 @@ class Albumentations:
         return im, labels
 
 
+class AlbumentationsWoLabels:
+    # YOLOv5 Albumentations class (optional, only used if package is installed)
+    def __init__(self):
+        self.transform = None
+        try:
+            import albumentations as A
+            check_version(A.__version__, '1.0.3')  # version requirement
+
+            self.transform = A.Compose([
+                A.Blur(p=0.01),
+                A.MedianBlur(p=0.01),
+                A.ToGray(p=0.01),
+                A.CLAHE(p=0.01),
+                A.RandomBrightnessContrast(p=0.0),
+                A.RandomGamma(p=0.0),
+                A.ImageCompression(quality_lower=75, p=0.0)],
+                bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
+            logging.info(colorstr('albumentations: ') + ', '.join(f'{x}' for x in self.transform.transforms if x.p))
+        except ImportError:  # package not installed, skip
+            pass
+        except Exception as e:
+            logging.info(colorstr('albumentations: ') + f'{e}')
+
+    def __call__(self, im, p=1.0):
+        if self.transform and random.random() < p:
+            new = self.transform(image=im)  # transformed
+            im = new['image']
+        return im
+
+
 def augment_hsv(im, hgain=0.5, sgain=0.5, vgain=0.5):
     # HSV color-space augmentation
     if hgain or sgain or vgain:
@@ -211,6 +242,20 @@ def random_perspective(im, targets=(), segments=(), degrees=10, translate=.1, sc
     return im, targets
 
 
+def copy_paste_wo_labels(im, p=0.5):
+    # Implement Copy-Paste augmentation https://arxiv.org/abs/2012.07177
+    if p:
+        h, w, c = im.shape  # height, width, channels
+        im_new = np.zeros(im.shape, np.uint8)
+
+        result = cv2.bitwise_and(src1=im, src2=im_new)
+        result = cv2.flip(result, 1)  # augment segments (flip left-right)
+        i = result > 0  # pixels to replace
+        # i[:, :] = result.max(2).reshape(h, w, 1)  # act over ch
+        im[i] = result[i]  # cv2.imwrite('debug.jpg', im)  # debug
+
+    return im
+
 def copy_paste(im, labels, segments, p=0.5):
     # Implement Copy-Paste augmentation https://arxiv.org/abs/2012.07177, labels as nx5 np.array(cls, xyxy)
     n = len(segments)
@@ -269,7 +314,7 @@ def mixup(im, labels, im2, labels2):
     labels = np.concatenate((labels, labels2), 0)
     return im, labels
 
-def mixup_no_labels(im, im2, labels2):
+def mixup_wo_labels(im, im2):
     # Applies MixUp augmentation https://arxiv.org/pdf/1710.09412.pdf
     r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
     im = (im * r + im2 * (1 - r)).astype(np.uint8)
