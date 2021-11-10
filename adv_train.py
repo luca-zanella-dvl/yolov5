@@ -421,8 +421,8 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader, target_loader))
         LOGGER.info(
-            ("\n" + "%10s" * 7)
-            % ("Epoch", "gpu_mem", "box", "obj", "cls", "labels", "img_size")
+            ("\n" + "%10s" * 10)
+            % ("Epoch", "gpu_mem", "box", "obj", "cls", "small", "medium", "large", "labels", "img_size")
         )
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
