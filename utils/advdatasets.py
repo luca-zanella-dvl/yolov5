@@ -136,28 +136,29 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       pad=pad,
                                       image_weights=image_weights,
                                       prefix=prefix)
-    target_dataset = LoadImagesNoLabels(target_path, imgsz, 
-                                      augment=False,  # augment images
-                                      hyp=hyp,  # augmentation hyperparameters
-                                      rect=rect,  # rectangular training
-                                      stride=int(stride),
-                                      image_weights=image_weights,
-                                      prefix=prefix)
+        target_dataset = LoadImagesNoLabels(target_path, imgsz, 
+                                        augment=False,  # augment images
+                                        hyp=hyp,  # augmentation hyperparameters
+                                        rect=rect,  # rectangular training
+                                        stride=int(stride),
+                                        image_weights=image_weights,
+                                        prefix=prefix)
 
     half_batch = min(half_batch, len(source_dataset), len(target_dataset))
     nw = min([os.cpu_count(), half_batch if half_batch > 1 else 0, workers])  # number of workers
-    sampler = torch.utils.data.distributed.DistributedSampler(source_dataset) if rank != -1 else None
+    source_sampler = torch.utils.data.distributed.DistributedSampler(source_dataset) if rank != -1 else None
+    target_sampler = torch.utils.data.distributed.DistributedSampler(target_dataset) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
     source_dataloader = loader(source_dataset,
                         batch_size=half_batch,
                         num_workers=nw,
-                        sampler=sampler,
+                        sampler=source_sampler,
                         pin_memory=True,
                         collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
     target_dataloader = loader(target_dataset,
                         batch_size=half_batch,
                         num_workers=nw,
-                        sampler=sampler,
+                        sampler=target_sampler,
                         pin_memory=True,
                         collate_fn=LoadImagesNoLabels.collate_fn4 if quad else LoadImagesNoLabels.collate_fn)
     return source_dataloader, source_dataset, target_dataloader, target_dataset
@@ -701,8 +702,8 @@ class LoadImagesNoLabels(Dataset):
     # YOLOv5 train_loader/val_loader, loads images for domain-adversarialtraining
     cache_version = 0.6  # dataset labels *.cache version
 
-    def __init__(self, path, img_size=640, augment=False, hyp=None, rect=False, image_weights=False,
-                 stride=32, prefix=''):
+    def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
+                 cache_images=False, stride=32, prefix=''):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -735,30 +736,34 @@ class LoadImagesNoLabels(Dataset):
         except Exception as e:
             raise Exception(f'{prefix}Error loading data from {path}: {e}\nSee {HELP_URL}')
 
-        # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
-        n = len(self.img_files)
+        n = len(self.img_files)  # number of images
+        bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
+        nb = bi[-1] + 1  # number of batches
+        self.batch = bi  # batch index of image
         self.n = n
         self.indices = range(n)
+
+        # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         self.imgs, self.img_npy = [None] * n, [None] * n
-        # if cache_images:
-        #     if cache_images == 'disk':
-        #         self.im_cache_dir = Path(Path(self.img_files[0]).parent.as_posix() + '_npy')
-        #         self.img_npy = [self.im_cache_dir / Path(f).with_suffix('.npy').name for f in self.img_files]
-        #         self.im_cache_dir.mkdir(parents=True, exist_ok=True)
-        #     gb = 0  # Gigabytes of cached images
-        #     self.img_hw0, self.img_hw = [None] * n, [None] * n
-        #     results = ThreadPool(NUM_THREADS).imap(lambda x: load_image(*x), zip(repeat(self), range(n)))
-        #     pbar = tqdm(enumerate(results), total=n)
-        #     for i, x in pbar:
-        #         if cache_images == 'disk':
-        #             if not self.img_npy[i].exists():
-        #                 np.save(self.img_npy[i].as_posix(), x[0])
-        #             gb += self.img_npy[i].stat().st_size
-        #         else:
-        #             self.imgs[i], self.img_hw0[i], self.img_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
-        #             gb += self.imgs[i].nbytes
-        #         pbar.desc = f'{prefix}Caching images ({gb / 1E9:.1f}GB {cache_images})'
-        #     pbar.close()
+        if cache_images:
+            if cache_images == 'disk':
+                self.im_cache_dir = Path(Path(self.img_files[0]).parent.as_posix() + '_npy')
+                self.img_npy = [self.im_cache_dir / Path(f).with_suffix('.npy').name for f in self.img_files]
+                self.im_cache_dir.mkdir(parents=True, exist_ok=True)
+            gb = 0  # Gigabytes of cached images
+            self.img_hw0, self.img_hw = [None] * n, [None] * n
+            results = ThreadPool(NUM_THREADS).imap(lambda x: load_image(*x), zip(repeat(self), range(n)))
+            pbar = tqdm(enumerate(results), total=n)
+            for i, x in pbar:
+                if cache_images == 'disk':
+                    if not self.img_npy[i].exists():
+                        np.save(self.img_npy[i].as_posix(), x[0])
+                    gb += self.img_npy[i].stat().st_size
+                else:
+                    self.imgs[i], self.img_hw0[i], self.img_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
+                    gb += self.imgs[i].nbytes
+                pbar.desc = f'{prefix}Caching images ({gb / 1E9:.1f}GB {cache_images})'
+            pbar.close()
 
     def __len__(self):
         return len(self.img_files)
