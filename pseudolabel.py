@@ -177,13 +177,13 @@ def pseudolabel(
         if len(plabels) > 0:
             labels = plabels[:, :-1]
             
-            conf_thres = int(pseudo_threshold * 100)
-            file_name = path.replace('images/extra', f'labels/pseudo-{conf_thres}').replace('jpg','txt').replace('JPG','txt').replace('png','txt').replace('PNG','txt')
+            conf = int(pseudo_threshold * 100)
+            file_name = path.replace('images/extra', f'labels/pseudo-conf{conf}').replace('jpg','txt').replace('JPG','txt').replace('png','txt').replace('PNG','txt')
             
             if (np.sum(np.isnan(labels)) == 0) and (np.sum(np.isinf(labels)) == 0):
                 np.savetxt(file_name, labels, delimiter=' ',fmt=['%d','%4f','%4f','%4f','%4f'])
                 image = Image.open(path)
-                image.save(path.replace('extra', f'pseudo-{conf_thres}'))
+                image.save(path.replace('extra', f'pseudo-conf{conf}'))
                 count += 1
                 image.close()
             else:
