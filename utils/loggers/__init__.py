@@ -44,8 +44,9 @@ class Loggers():
                      'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',  # metrics
                      'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
                      'x/lr0', 'x/lr1', 'x/lr2']  # params
-        self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large']  # adversarial train loss
-        self.keys += self.adv_keys
+        if self.opt.adv:
+            self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large']  # adversarial train loss
+            self.keys += self.adv_keys
         for k in LOGGERS:
             setattr(self, k, None)  # init empty logger dictionary
         self.csv = True  # always log to csv

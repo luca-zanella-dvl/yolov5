@@ -488,7 +488,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 
                 domain_loss, domain_loss_items = compute_domain_loss(
                     source_domain_pred, target_domain_pred
-                )
+                )  # loss scaled by batch_size
 
                 # source_domain_pred = torch.cat(source_domain_pred)
                 # target_domain_pred = torch.cat(target_domain_pred)
@@ -800,6 +800,7 @@ def parse_opt(known=False):
         default=5.0,
         help="Smoothness of the domain adaptation change",
     )
+    parser.add_argument('--adv', action='store_true', help='adversarial domain adaptation')
 
     # Weights & Biases arguments
     parser.add_argument("--entity", default=None, help="W&B: Entity")
