@@ -148,7 +148,8 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       prefix=prefix)
 
     half_batch = min(half_batch, len(source_dataset), len(target_dataset))
-    half_nw = min([os.cpu_count(), half_batch if half_batch > 1 else 0, workers])  # number of workers
+    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, workers])  # number of workers
+    half_nw = nw // 2
     source_sampler = torch.utils.data.distributed.DistributedSampler(source_dataset) if rank != -1 else None
     target_sampler = torch.utils.data.distributed.DistributedSampler(target_dataset) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
