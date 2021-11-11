@@ -388,7 +388,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     compute_domain_loss = ComputeDomainLoss(model)
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
-        f"Using {train_loader.num_workers} dataloader workers\n"
+        f"Using {train_loader.num_workers + target_loader.num_workers} dataloader workers\n"
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f"Starting training for {epochs} epochs..."
     )
@@ -418,6 +418,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
+            target_loader.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader, target_loader))
         LOGGER.info(
@@ -476,10 +477,10 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
                 source_pred, source_domain_pred = model(
-                    imgs[: source_imgs.shape[0]], gamma=gamma
+                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma
                 )  # forward
                 target_pred, target_domain_pred = model(
-                    imgs[source_imgs.shape[0] :], gamma=gamma
+                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma
                 )  # forward
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
