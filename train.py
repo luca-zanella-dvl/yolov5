@@ -481,6 +481,7 @@ def parse_opt(known=False):
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
+    parser.add_argument("--local_rank", type=int, default=-1, help="DDP parameter, do not modify")
     parser.add_argument('--pseudo', action='store_true', help='semi-supervised learning')
     parser.add_argument('--adv', action='store_true', help='adversarial domain adaptation')
     
@@ -489,6 +490,7 @@ def parse_opt(known=False):
     parser.add_argument('--upload_dataset', action='store_true', help='W&B: Upload dataset as artifact table')
     parser.add_argument('--bbox_interval', type=int, default=-1, help='W&B: Set bounding-box image logging interval')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
+    
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
