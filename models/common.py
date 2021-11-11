@@ -188,9 +188,10 @@ class DETRTransformer(nn.Module):
         # 2. reshape the resulting vector to H_s x W_s
         obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        obj_map -= obj_map.min(1, keepdim=True)[0]
-        obj_map /= obj_map.max(1, keepdim=True)[0]
-        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(obj_map)  # G_s, A_s
+        obj_map = obj_map - obj_map.min(1, keepdim=True)[0]
+        obj_map = obj_map / obj_map.max(1, keepdim=True)[0]
+        obj_map = torch.nan_to_num(obj_map)
+        return memory.permute(1, 2, 0).view(bs, c, h, w), obj_map  # G_s, A_s
 
 
 class DETRTransformerEncoder(nn.Module):
@@ -263,7 +264,7 @@ class DETRTransformerEncoderLayer(nn.Module):
         src = src + self.dropout1(attn_output)
         # X~q
         src = self.norm1(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src), inplace=False)))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src, attn_output_weights
@@ -281,7 +282,7 @@ class DETRTransformerEncoderLayer(nn.Module):
                               key_padding_mask=src_key_padding_mask)[0]
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src2), inplace=False)))
         src = src + self.dropout2(src2)
         return src
 
@@ -309,7 +310,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.conv = None
         if num_channels != d_model:
-            self.conv = Conv(num_channels, d_model)  # NxCxHxW to NxDxHxW
+            self.conv = Conv(num_channels, d_model, 1, 1)  # NxCxHxW to NxDxHxW
         self.pos_embed = nn.Linear(d_model, d_model)  # learnable position embedding
         encoder_layer = TransformerEncoderLayer(
             d_model, num_heads, dim_feedforward, dropout, activation
@@ -341,9 +342,10 @@ class Transformer(nn.Module):
         # 2. reshape the resulting vector to H_s x W_s
         obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        obj_map -= obj_map.min(1, keepdim=True)[0]
-        obj_map /= obj_map.max(1, keepdim=True)[0]
-        return memory.permute(1, 2, 0).view(bs, c, h, w), torch.nan_to_num(obj_map)  # G_s, A_s
+        obj_map = obj_map - obj_map.min(1, keepdim=True)[0]
+        obj_map = obj_map / obj_map.max(1, keepdim=True)[0]
+        obj_map = torch.nan_to_num(obj_map)
+        return memory.permute(1, 2, 0).view(bs, c, h, w), obj_map  # G_s, A_s
 
 
 class TransformerEncoder(nn.Module):
@@ -413,7 +415,7 @@ class TransformerEncoderLayer(nn.Module):
         src = src + self.dropout1(attn_output)
         # X~q
         src = self.norm1(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src), inplace=False)))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src, attn_output_weights
@@ -434,8 +436,8 @@ class Discriminator(nn.Module):
         x = self.rev(x)
         
         x = self.flatten(x)
-        x = self.activation(self.linear1(x))
-        x = self.activation(self.linear2(x))
+        x = self.activation(self.linear1(x), inplace=False)
+        x = self.activation(self.linear2(x), inplace=False)
         x = self.classifier(x)
         return x
 
