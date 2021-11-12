@@ -328,7 +328,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         val_loader = create_dataloader(
             val_path,
             imgsz,
-            batch_size // WORLD_SIZE * 2,
+            batch_size // WORLD_SIZE,
             gs,
             single_cls,
             hyp=hyp,
@@ -565,7 +565,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             if not noval or final_epoch:  # Calculate mAP
                 results, maps, _ = val.run(
                     data_dict,
-                    batch_size=batch_size // WORLD_SIZE * 2,
+                    batch_size=batch_size // WORLD_SIZE,
                     imgsz=imgsz,
                     model=ema.ema,
                     single_cls=single_cls,
@@ -639,7 +639,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     LOGGER.info(f"\nValidating {f}...")
                     results, _, _ = val.run(
                         data_dict,
-                        batch_size=batch_size // WORLD_SIZE * 2,
+                        batch_size=batch_size // WORLD_SIZE,
                         imgsz=imgsz,
                         model=attempt_load(f, device).half(),
                         iou_thres=0.65
