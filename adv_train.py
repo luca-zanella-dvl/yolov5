@@ -477,10 +477,10 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
                 source_pred, source_domain_pred = model(
-                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma
+                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0
                 )  # forward
                 target_pred, target_domain_pred = model(
-                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma
+                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1
                 )  # forward
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
@@ -641,7 +641,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         data_dict,
                         batch_size=batch_size // WORLD_SIZE,
                         imgsz=imgsz,
-                        model=attempt_load(f, device).half(),
+                        model=attempt_load(f, device, fuse=False).half(), # set fuse to False since we have multiple BatchNorm
                         iou_thres=0.65
                         if is_coco
                         else 0.60,  # best pycocotools results at 0.65
