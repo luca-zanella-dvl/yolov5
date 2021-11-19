@@ -485,6 +485,47 @@ class Discriminator(nn.Module):
         return x
 
 
+class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get c1 from previous layer
+    def __init__(self, c1, num_convs=2, lambda_=0.1):
+        super().__init__()
+        self.rev = GradientReversal(lambda_=lambda_)
+
+        dis_tower = []
+        for _ in range(num_convs):
+            dis_tower.append(
+                nn.Conv2d(
+                    c1,
+                    c1,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1
+                )
+            )
+            dis_tower.append(nn.GroupNorm(32, c1))
+            dis_tower.append(nn.ReLU())
+
+        self.add_module('dis_tower', nn.Sequential(*dis_tower))
+
+        self.cls_logits = nn.Conv2d(
+            c1, 1, kernel_size=3, stride=1,
+            padding=1
+        )
+
+        # initialization
+        for modules in [self.dis_tower, self.cls_logits]:
+            for l in modules.modules():
+                if isinstance(l, nn.Conv2d):
+                    torch.nn.init.normal_(l.weight, std=0.01)
+                    torch.nn.init.constant_(l.bias, 0)
+    
+    def forward(self, x):
+        x = self.rev(x)
+        
+        x = self.dis_tower(x)
+        x = self.cls_logits(x)
+        return x
+
+
 class GradientReversal(torch.nn.Module):
     def __init__(self, lambda_=1):
         super(GradientReversal, self).__init__()

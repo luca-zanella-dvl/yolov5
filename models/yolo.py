@@ -157,7 +157,7 @@ class Model(nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            if 'Discriminator' in m.type:
+            if 'Discriminator' in m.type or 'DiscriminatorConv' in m.type:
                 if not validation:
                     num_channels = torch.tensor(x.shape[1])
                     # NxHxW to Nx1xHxW
@@ -311,6 +311,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        elif m is DiscriminatorConv:
+            args.insert(0, c1)
         else:
             c2 = ch[f]
 
