@@ -258,12 +258,11 @@ class ComputeDomainLoss:
         # Losses
         for i in range(len(sp)):
             losses[i] += self.BCE(torch.cat((sp[i], tp[i])), targets[i].to(device))
-            # losses[i] *= self.hyp['domain']
-
-        loss_d = sum(losses) * self.hyp['d']
+            losses[i] *= self.hyp['domain']
+            
         bs = sp[0].shape[0] * 2  # batch size
 
-        return loss_d * bs, torch.cat(losses).detach()
+        return sum(losses) * bs, torch.cat(losses).detach()
 
         # lsmall, lmedium, llarge = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
         # tsmall, tmedium, tlarge = self.build_targets(sp, tp)  # targets
