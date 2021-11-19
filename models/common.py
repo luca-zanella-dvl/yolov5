@@ -183,7 +183,6 @@ class DETRTransformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, src, mask=None):  # F_{s} NxDxHxW
-        # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
         pos_embed = self.pos_embed(src).flatten(2).permute(2, 0, 1)
         src = src.flatten(2).permute(2, 0, 1)
@@ -337,11 +336,11 @@ class Transformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, src):  # F_{s} NxDxHxW
-        # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
-        src = src.flatten(2).permute(2, 0, 1)
         if self.conv is not None:
             src = self.conv(src)
+        # flatten NxDxHxW to HWxNxD
+        src = src.flatten(2).permute(2, 0, 1)
         src = src + self.pos_embed(src)
 
         memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
