@@ -281,8 +281,9 @@ class ComputeDomainLoss:
 
     def build_targets(self, sp, tp):
         # Build targets for compute_domain_loss()
-        t = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
-        t = torch.unsqueeze(t, 1)
+        # t = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
+        # t = torch.unsqueeze(t, 1)
+        t = torch.cat((torch.zeros(sp[0].shape), torch.ones(tp[0].shape)))
         return t
 
         # tsmall = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
@@ -290,13 +291,3 @@ class ComputeDomainLoss:
         # tlarge = torch.cat((torch.zeros(sp[2].shape[0]), torch.ones(tp[2].shape[0])))
         
         # return tsmall, tmedium, tlarge
-
-# class ComputeDomainLoss:
-#     # Compute domain loss
-#     def __init__(self):
-#         self.BCE = nn.BCEWithLogitsLoss()
-
-#     def __call__(self, p, targets):  # predictions, targets
-#         loss = self.BCE(p, targets)
-
-#         return loss

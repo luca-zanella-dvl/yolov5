@@ -163,15 +163,17 @@ class Model(nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            if 'Discriminator' in m.type:
-                num_channels = x.shape[1]
-                # need to define M which is composed by the output of the previous layer and attention
-                # NxHxW to Nx1xHxW
-                obj_map = torch.unsqueeze(obj_map, 1)
-                # Nx1xHxW to Nx3xHxW
-                obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
-                weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
-                dis_out.append(m(weigh_feat_map))
+            if 'Discriminator' in m.type or 'DiscriminatorConv' in m.type:
+                if not validation:
+                    num_channels = torch.tensor(x.shape[1])
+                    # NxHxW to Nx1xHxW
+                    obj_map = torch.unsqueeze(obj_map, 1)
+                    if obj_map.get_device() != -1:
+                        num_channels = num_channels.to(obj_map.get_device()) 
+                    # Nx1xHxW to Nx3xHxW
+                    obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
+                    weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
+                    dis_out.append(m(weigh_feat_map))
             elif any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
                 x, obj_map = m(x, domain)  # run
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
@@ -309,6 +311,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        elif m is DiscriminatorConv:
+            args.insert(0, c1)
         else:
             c2 = ch[f]
 
