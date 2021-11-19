@@ -312,7 +312,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
         elif m is DiscriminatorConv:
-            args.insert(0, c1)
+            args.insert(0, ch[f])
         else:
             c2 = ch[f]
 
