@@ -121,7 +121,7 @@ def run(data,
 
         # Load model
         check_suffix(weights, '.pt')
-        model = attempt_load(weights, map_location=device)  # load FP32 model
+        model = attempt_load(weights, map_location=device, fuse=False)  # load FP32 model
         gs = max(int(model.stride.max()), 32)  # grid size (max stride)
         imgsz = check_img_size(imgsz, s=gs)  # check image size
 
