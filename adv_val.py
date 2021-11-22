@@ -121,7 +121,7 @@ def run(data,
 
         # Load model
         check_suffix(weights, '.pt')
-        model = attempt_load(weights, map_location=device)  # load FP32 model
+        model = attempt_load(weights, map_location=device, fuse=False)  # load FP32 model
         gs = max(int(model.stride.max()), 32)  # grid size (max stride)
         imgsz = check_img_size(imgsz, s=gs)  # check image size
 
@@ -146,7 +146,7 @@ def run(data,
     # Dataloader
     if not training:
         if device.type != 'cpu':
-            model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
+            model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())), domain=1)  # run once
         pad = 0.0 if task == 'speed' else 0.5
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader(data[task], imgsz, batch_size, gs, single_cls, pad=pad, rect=True,
@@ -171,7 +171,7 @@ def run(data,
         dt[0] += t2 - t1
 
         # Run model
-        out, train_out = model(img, augment=augment, validation=True)  # inference and training outputs
+        out, train_out = model(img, augment=augment, validation=True, domain=1)  # inference and training outputs
         dt[1] += time_sync() - t2
 
         # Compute loss

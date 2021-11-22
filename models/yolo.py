@@ -18,10 +18,9 @@ if str(ROOT) not in sys.path:
 # ROOT = ROOT.relative_to(Path.cwd())  # relative
 
 adv = True if 'adv' in Path(sys.argv[0]).stem else False
-val = True if 'val' in Path(sys.argv[0]).stem else False
 
 from models.experimental import *
-if adv or val:
+if adv:
     from models.advcommon import *
 else:
     from models.common import *
@@ -122,7 +121,7 @@ class Model(nn.Module):
             self._initialize_biases()  # only run once
 
         # Init LazyLinear layer
-        self.forward(torch.zeros(1, ch, 640, 640))
+        # self.forward(torch.zeros(1, ch, 640, 640))
 
         # Init weights, biases
         initialize_weights(self)
@@ -132,8 +131,6 @@ class Model(nn.Module):
     def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
         if domain is None and adv: # for initializations and validation during training
             domain = 0
-        if domain is None and val: # for validation 
-            domain = 1
         
         if augment:
             return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain)  # augmented inference, None
