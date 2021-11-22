@@ -416,14 +416,15 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
 
         mloss = torch.zeros(3, device=device)  # mean losses
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
+        madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
             target_loader.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader, target_loader))
         LOGGER.info(
-            ("\n" + "%10s" * 10)
-            % ("Epoch", "gpu_mem", "box", "obj", "cls", "small", "medium", "large", "labels", "img_size")
+            ("\n" + "%10s" * 13)
+            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "labels", "img_size")
         )
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
@@ -476,35 +477,22 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
+
                 source_pred, source_domain_pred = model(
                     imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0
                 )  # forward
                 target_pred, target_domain_pred = model(
                     imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1
                 )  # forward
+
                 loss, loss_items = compute_loss(
                     source_pred, source_targets.to(device)
                 )  # loss scaled by batch_size
                 
-                domain_loss, domain_loss_items = compute_domain_loss(
+                domain_loss, domain_loss_items, domain_accuracy_items = compute_domain_loss(
                     source_domain_pred, target_domain_pred
                 )  # loss scaled by batch_size
 
-                # source_domain_pred = torch.cat(source_domain_pred)
-                # target_domain_pred = torch.cat(target_domain_pred)
-                # domain_pred = torch.cat((source_domain_pred, target_domain_pred))
-
-                # domain_targets = torch.cat(
-                #     [
-                #         torch.zeros(source_domain_pred.shape[0]),
-                #         torch.ones(target_domain_pred.shape[0]),
-                #     ]
-                # )
-                # domain_targets = torch.unsqueeze(domain_targets, 1)
-
-                # domain_loss = compute_domain_loss(
-                #     domain_pred, domain_targets.to(device)
-                # )
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
@@ -527,14 +515,16 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             if RANK in [-1, 0]:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
+                madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
                 mem = f"{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G"  # (GB)
                 pbar.set_description(
-                    ("%10s" * 2 + "%10.4g" * 8)
+                    ("%10s" * 2 + "%10.4g" * 11)
                     % (
                         f"{epoch}/{epochs - 1}",
                         mem,
                         *mloss,
                         *madvloss,
+                        *madvaccuracy,
                         source_targets.shape[0],
                         imgs.shape[-1],
                     )
@@ -582,7 +572,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             )  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr + list(madvloss)
+            log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy)
             callbacks.run("on_fit_epoch_end", log_vals, epoch, best_fitness, fi)
 
             # Save model
@@ -657,7 +647,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     if is_coco:
                         callbacks.run(
                             "on_fit_epoch_end",
-                            list(mloss) + list(results) + lr + list(madvloss),
+                            list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy),
                             epoch,
                             best_fitness,
                             fi,

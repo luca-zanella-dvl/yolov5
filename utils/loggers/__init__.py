@@ -45,7 +45,8 @@ class Loggers():
                      'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
                      'x/lr0', 'x/lr1', 'x/lr2']  # params
         if self.opt.adv:
-            self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large']  # adversarial train loss
+            self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large', # adversarial train loss
+                             'train/domain_accuracy_small', 'train/domain_accuracy_medium', 'train/domain_accuracy_large'] # adversarial train accuracy
             self.keys += self.adv_keys
         for k in LOGGERS:
             setattr(self, k, None)  # init empty logger dictionary
