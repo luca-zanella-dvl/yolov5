@@ -21,9 +21,10 @@ if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 adv = True if 'adv' in Path(sys.argv[0]).stem else False
+val = True if 'val' in Path(sys.argv[0]).stem else False
 
 from models.experimental import *
-if adv:
+if adv or val:
     from models.advcommon import *
 else:
     from models.common import *
@@ -135,8 +136,10 @@ class Model(nn.Module):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
-        if domain is None and adv: # for initializations and validation 
+        if domain is None and adv: # for initializations and validation during training
             domain = 0
+        if domain is None and val: # for validation 
+            domain = 1
         
         if augment:
             return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain)  # augmented inference, None
