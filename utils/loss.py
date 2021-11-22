@@ -243,53 +243,34 @@ class ComputeDomainLoss:
         BCE = nn.BCEWithLogitsLoss()
         self.BCE, self.hyp = BCE, h 
 
-        # BCEsmall = nn.BCEWithLogitsLoss(device=device)
-        # BCEmedium = nn.BCEWithLogitsLoss(device=device)
-        # BCElarge = nn.BCEWithLogitsLoss(device=device)
-
-        # self.BCEsmall, self.BCEmedium, self.BCElarge, self.hyp = BCEsmall, BCEmedium, BCElarge, h
-
     def __call__(self, sp, tp):  # source predictions, target predictions
         device = sp[0].device
 
         losses = [torch.zeros(1, device=device) for _ in range(len(sp))]
+        accuracies = [torch.zeros(1, device=device) for _ in range(len(sp))]
         targets = self.build_targets(sp, tp)  # targets
 
-        # Losses
+        # Losses and accuracies
         for i in range(len(sp)):
             losses[i] += self.BCE(torch.cat((sp[i], tp[i])), targets[i].to(device))
             losses[i] *= self.hyp['domain']
+            accuracies[i] = self.compute_accuracies(torch.cat((sp[i], tp[i])), targets[i].to(device))
             
         bs = sp[0].shape[0] * 2  # batch size
 
-        return sum(losses) * bs, torch.cat(losses).detach()
-
-        # lsmall, lmedium, llarge = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-        # tsmall, tmedium, tlarge = self.build_targets(sp, tp)  # targets
-
-        # # Losses
-        # lsmall += self.BCEsmall(torch.cat((sp[0], tp[0])), tsmall)
-        # lmedium += self.BCEmedium(torch.cat((sp[1], tp[1])), tmedium)
-        # llarge += self.BCElarge(torch.cat((sp[2], tp[2])), tlarge)
-            
-        # # lsmall *= self.hyp['small']
-        # # lmedium *= self.hyp['medium']
-        # # llarge *= self.hyp['large']
-        # bs = sp[0].shape[0] * 2  # batch size
-
-        # return (lsmall + lmedium + llarge) * bs, torch.cat((lsmall, lmedium, llarge)).detach()
+        return sum(losses) * bs, torch.cat(losses).detach(), torch.cat(accuracies).detach()
 
     def build_targets(self, sp, tp):
         # Build targets for compute_domain_loss()
-        # t = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
-        # t = torch.unsqueeze(t, 1)
         t = []
         for i in range(len(sp)):
             t.append(torch.cat((torch.zeros(sp[i].shape), torch.ones(tp[i].shape))))
         return t
 
-        # tsmall = torch.cat((torch.zeros(sp[0].shape[0]), torch.ones(tp[0].shape[0])))
-        # tmedium = torch.cat((torch.zeros(sp[1].shape[0]), torch.ones(tp[1].shape[0])))
-        # tlarge = torch.cat((torch.zeros(sp[2].shape[0]), torch.ones(tp[2].shape[0])))
-        
-        # return tsmall, tmedium, tlarge
+    def compute_accuracies(self, scores, ground_truth):
+        # Compute accuracies for compute_domain_loss()
+        predictions = (scores > 0.) # if > 0 it predicted source
+        num_correct = (predictions == ground_truth).sum()
+        num_samples = torch.prod(torch.tensor(predictions.shape))
+        accuracy = float(num_correct)/float(num_samples)*100
+        return torch.tensor([accuracy]).to(scores.device)
