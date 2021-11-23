@@ -613,14 +613,14 @@ class C3(nn.Module):
 
 class C3TR(nn.Module):
     # C3 module with Transformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+    def __init__(self, c1, c2, n=6, shortcut=True, g=1, e=0.5):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
         self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = Transformer(c2, c2, 4, n)
+        self.m2 = Transformer(c2, c2, 8, n)
         
     def forward(self, x, domain):
         x = self.cv3(torch.cat((self.m1(self.cv1(x, domain), domain), self.cv2(x, domain)), dim=1), domain)
