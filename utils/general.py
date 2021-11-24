@@ -21,6 +21,7 @@ from datetime import datetime
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+import sys
 from subprocess import check_output
 from typing import Optional
 from zipfile import ZipFile
@@ -63,6 +64,8 @@ def is_kaggle():
         return True
     except AssertionError:
         return False
+
+adv = True if 'adv' in Path(sys.argv[0]).stem else False
 
 
 def is_writeable(dir, test=False):
