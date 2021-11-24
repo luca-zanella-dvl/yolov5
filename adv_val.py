@@ -106,7 +106,11 @@ def run(data,
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
+        source=0,
         ):
+    # Store domain
+    domain = 0 if source else 1
+    
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -146,7 +150,7 @@ def run(data,
     # Dataloader
     if not training:
         if device.type != 'cpu':
-            model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())), domain=1)  # run once
+            model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())), domain=domain)  # run once
         pad = 0.0 if task == 'speed' else 0.5
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader(data[task], imgsz, batch_size, gs, single_cls, pad=pad, rect=True,
@@ -171,7 +175,7 @@ def run(data,
         dt[0] += t2 - t1
 
         # Run model
-        out, train_out = model(img, augment=augment, validation=True, domain=1)  # inference and training outputs
+        out, train_out = model(img, augment=augment, validation=True, domain=domain)  # inference and training outputs
         dt[1] += time_sync() - t2
 
         # Compute loss
@@ -318,6 +322,7 @@ def parse_opt():
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
+    parser.add_argument('--source', action='store_true', help='validation of adv model on source data')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
