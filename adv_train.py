@@ -298,7 +298,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
 
     # Trainloader
     print("Domain-Adversarial training")
-    (train_loader, dataset, target_loader, target_dataset) = create_adv_dataloaders(
+    (train_loader_s, dataset_s, train_loader_t, dataset_t) = create_adv_dataloaders(
         train_path,
         adv_path,
         imgsz,
@@ -315,9 +315,9 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         quad=opt.quad,
         prefix=colorstr("train: "),
     )
-    mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class
+    mlc = int(np.concatenate(dataset_s.labels, 0)[:, 0].max())  # max label class
     # len(dataset) / batch_size
-    nb = min(len(train_loader), len(target_loader))  # number of batches
+    nb = min(len(train_loader_s), len(train_loader_t))  # number of batches
 
     assert (
         mlc < nc
@@ -341,7 +341,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         )[0]
 
         if not resume:
-            labels = np.concatenate(dataset.labels, 0)
+            labels = np.concatenate(dataset_s.labels, 0)
             # c = torch.tensor(labels[:, 0])  # classes
             # cf = torch.bincount(c.long(), minlength=nc) + 1.  # frequency
             # model._initialize_biases(cf.to(device))
@@ -350,7 +350,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
 
             # Anchors
             if not opt.noautoanchor:
-                check_anchors(dataset, model=model, thr=hyp["anchor_t"], imgsz=imgsz)
+                check_anchors(dataset_s, model=model, thr=hyp["anchor_t"], imgsz=imgsz)
             model.half().float()  # pre-reduce anchor precision
 
         callbacks.run("on_pretrain_routine_end")
@@ -368,7 +368,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.class_weights = (
-        labels_to_class_weights(dataset.labels, nc).to(device) * nc
+        labels_to_class_weights(dataset_s.labels, nc).to(device) * nc
     )  # attach class weights
     model.names = names
 
@@ -388,7 +388,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
     compute_domain_loss = ComputeDomainLoss(model)
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
-        f"Using {train_loader.num_workers + target_loader.num_workers} dataloader workers\n"
+        f"Using {train_loader_s.num_workers + train_loader_t.num_workers} dataloader workers\n"
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f"Starting training for {epochs} epochs..."
     )
@@ -404,10 +404,10 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc
             )  # class weights
             iw = labels_to_image_weights(
-                dataset.labels, nc=nc, class_weights=cw
+                dataset_s.labels, nc=nc, class_weights=cw
             )  # image weights
-            dataset.indices = random.choices(
-                range(dataset.n), weights=iw, k=dataset.n
+            dataset_s.indices = random.choices(
+                range(dataset_s.n), weights=iw, k=dataset_s.n
             )  # rand weighted idx
 
         # Update mosaic border (optional)
@@ -418,10 +418,10 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
         if RANK != -1:
-            train_loader.sampler.set_epoch(epoch)
-            target_loader.sampler.set_epoch(epoch)
+            train_loader_s.sampler.set_epoch(epoch)
+            train_loader_t.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
-        pbar = enumerate(zip(train_loader, target_loader))
+        pbar = enumerate(zip(train_loader_s, train_loader_t))
         LOGGER.info(
             ("\n" + "%10s" * 13)
             % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "labels", "img_size")
@@ -430,13 +430,13 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (
-            (source_imgs, source_targets, source_paths, _),
-            (target_imgs, target_paths, _),
+            (imgs_s, targets_s, paths_s, _),
+            (imgs_t, paths_t, _),
         ) in (
             pbar
         ):  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = torch.cat([source_imgs, target_imgs])
+            imgs = torch.cat([imgs_s, imgs_t])
             imgs = (
                 imgs.to(device, non_blocking=True).float() / 255.0
             )  # uint8 to float32, 0-255 to 0.0-1.0
@@ -478,19 +478,19 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
 
-                source_pred, source_domain_pred = model(
+                pred_s, domain_pred_s = model(
                     imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0
                 )  # forward
-                target_pred, target_domain_pred = model(
+                pred_t, domain_pred_t = model(
                     imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1
                 )  # forward
 
                 loss, loss_items = compute_loss(
-                    source_pred, source_targets.to(device)
+                    pred_s, targets_s.to(device)
                 )  # loss scaled by batch_size
                 
                 domain_loss, domain_loss_items, domain_accuracy_items = compute_domain_loss(
-                    source_domain_pred, target_domain_pred
+                    domain_pred_s, domain_pred_t
                 )  # loss scaled by batch_size
 
                 if RANK != -1:
@@ -525,7 +525,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                         *mloss,
                         *madvloss,
                         *madvaccuracy,
-                        source_targets.shape[0],
+                        targets_s.shape[0],
                         imgs.shape[-1],
                     )
                 )
@@ -533,9 +533,9 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                     "on_train_batch_end",
                     ni,
                     model,
-                    source_imgs.float().to(device),
-                    source_targets,
-                    source_paths,
+                    imgs_s.float().to(device),
+                    targets_s,
+                    paths_s,
                     plots,
                     opt.sync_bn,
                 )
