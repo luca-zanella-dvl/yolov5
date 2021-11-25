@@ -553,7 +553,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
             )
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
             if not noval or final_epoch:  # Calculate mAP
-                results, maps, _ = val.run(
+                results, maps, _ = adv_val.run(
                     data_dict,
                     batch_size=batch_size // WORLD_SIZE,
                     imgsz=imgsz,
@@ -627,7 +627,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 strip_optimizer(f)  # strip optimizers
                 if f is best:
                     LOGGER.info(f"\nValidating {f}...")
-                    results, _, _ = val.run(
+                    results, _, _ = adv_val.run(
                         data_dict,
                         batch_size=batch_size // WORLD_SIZE,
                         imgsz=imgsz,
