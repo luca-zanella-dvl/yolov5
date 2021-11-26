@@ -174,7 +174,7 @@ class Model(nn.Module):
                     obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                     weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
                     dis_out.append(m(weigh_feat_map))
-            elif any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
+            elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
                 x, obj_map = m(x, domain)  # run
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
                 x = m(x, domain)  # run
