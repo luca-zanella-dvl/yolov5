@@ -110,7 +110,11 @@ class Model(nn.Module):
         self.inplace = self.yaml.get('inplace', True)
 
         # Build strides, anchors
-        m = self.model[-1]  # Detect()
+        for i, q in enumerate(self.model.children()):
+            if q._get_name() == 'Detect':
+                m = self.model[i]
+
+        # m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
@@ -159,15 +163,21 @@ class Model(nn.Module):
                 self._profile_one_layer(m, x, dt)
             if any([module in m.type for module in ['Discriminator', 'DiscriminatorConv']]):
                 if not validation:
-                    num_channels = torch.tensor(x.shape[1])
-                    # NxHxW to Nx1xHxW
-                    obj_map = torch.unsqueeze(obj_map, 1)
-                    if obj_map.get_device() != -1:
-                        num_channels = num_channels.to(obj_map.get_device()) 
-                    # Nx1xHxW to Nx3xHxW
-                    obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
-                    weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
-                    dis_out.append(m(weigh_feat_map))
+                    if isinstance(x, list): # x output of Detect
+                        for i in range(len(x)):
+                            n, a, h, w, c = x[i].shape
+                            x_resized = x[i].view(n, a*c, h, w)
+                            dis_out.append(m(x_resized))
+                    else:
+                        num_channels = torch.tensor(x.shape[1])
+                        # NxHxW to Nx1xHxW
+                        obj_map = torch.unsqueeze(obj_map, 1)
+                        if obj_map.get_device() != -1:
+                            num_channels = num_channels.to(obj_map.get_device()) 
+                        # Nx1xHxW to Nx3xHxW
+                        obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
+                        weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
+                        dis_out.append(m(weigh_feat_map))
             elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
                 x, obj_map = m(x, domain)  # run
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
@@ -198,7 +208,11 @@ class Model(nn.Module):
 
     def _clip_augmented(self, y):
         # Clip YOLOv5 augmented inference tails
-        nl = self.model[-1].nl  # number of detection layers (P3-P5)
+        for i, q in enumerate(self.model.children()):
+            if q._get_name() == 'Detect':
+                m = self.model[i]
+        # nl = self.model[-1].nl
+        nl = m.nl  # number of detection layers (P3-P5)
         g = sum(4 ** x for x in range(nl))  # grid points
         e = 1  # exclude layer count
         i = (y[0].shape[1] // g) * sum(4 ** x for x in range(e))  # indices
@@ -223,7 +237,10 @@ class Model(nn.Module):
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
-        m = self.model[-1]  # Detect() module
+        for i, q in enumerate(self.model.children()):
+            if q._get_name() == 'Detect':
+                m = self.model[i]
+        # m = self.model[-1]  # Detect() module
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
             b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
@@ -231,7 +248,10 @@ class Model(nn.Module):
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def _print_biases(self):
-        m = self.model[-1]  # Detect() module
+        for i, q in enumerate(self.model.children()):
+            if q._get_name() == 'Detect':
+                m = self.model[i]
+        # m = self.model[-1]  # Detect() module
         for mi in m.m:  # from
             b = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
             LOGGER.info(
@@ -264,7 +284,7 @@ class Model(nn.Module):
     def _apply(self, fn):
         # Apply to(), cpu(), cuda(), half() to model tensors that are not parameters or registered buffers
         self = super()._apply(fn)
-        m = self.model[-1]  # Detect()
+        m = self.model[-2]  # Detect()
         if isinstance(m, Detect):
             m.stride = fn(m.stride)
             m.grid = list(map(fn, m.grid))
@@ -312,7 +332,10 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
         elif adv and m is DiscriminatorConv:
-            args.insert(0, ch[f])
+            if(i == len(d['backbone'] + d['head'])-1): # if last layer, thus after Detect
+                args.insert(0, no)
+            else:
+                args.insert(0, ch[f])
         else:
             c2 = ch[f]
 

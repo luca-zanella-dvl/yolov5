@@ -360,7 +360,11 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
 
     # Model parameters
-    nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
+    for i, q in enumerate(de_parallel(model).model.children()):
+            if q._get_name() == 'Detect':
+                m = de_parallel(model).model[i]
+    # nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
+    nl = m.nl  # number of detection layers (to scale hyps)
     hyp["box"] *= 3.0 / nl  # scale to layers
     hyp["cls"] *= nc / 80.0 * 3.0 / nl  # scale to classes and layers
     hyp["obj"] *= (imgsz / 640) ** 2 * 3.0 / nl  # scale to image size and layers
@@ -415,16 +419,16 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
         mloss = torch.zeros(3, device=device)  # mean losses
-        madvloss = torch.zeros(3, device=device)  # mean adversarial losses
-        madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
+        madvloss = torch.zeros(6, device=device)  # mean adversarial losses
+        madvaccuracy = torch.zeros(6, device=device)  # mean adversarial accuracies
         if RANK != -1:
             train_loader_s.sampler.set_epoch(epoch)
             train_loader_t.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader_s, train_loader_t))
         LOGGER.info(
-            ("\n" + "%10s" * 13)
-            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "labels", "img_size")
+            ("\n" + "%10s" * 19)
+            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_s", "l_m", "l_l", "l_s_d", "l_m_d", "l_l_d", "a_s", "a_m", "a_l", "a_s_d", "a_m_d", "a_l_d", "labels", "img_size")
         )
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
@@ -518,7 +522,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
                 madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
                 mem = f"{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G"  # (GB)
                 pbar.set_description(
-                    ("%10s" * 2 + "%10.4g" * 11)
+                    ("%10s" * 2 + "%10.4g" * 17)
                     % (
                         f"{epoch}/{epochs - 1}",
                         mem,
