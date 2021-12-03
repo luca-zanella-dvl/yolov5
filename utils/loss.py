@@ -246,10 +246,13 @@ class ComputeDomainLoss:
             losses[i] += self.BCE(torch.cat((sp[i], tp[i])), targets[i].to(device))
             losses[i] *= self.hyp['domain']
             accuracies[i] = self.compute_accuracies(torch.cat((sp[i], tp[i])), targets[i].to(device))
+
+        losses_detmean = losses[:-3] + [torch.tensor([torch.mean(torch.stack(losses[-3:]))]).to(device)]
+        accuracies_detmean = accuracies[:-3] + [torch.tensor([torch.mean(torch.stack(accuracies[-3:]))]).to(device)]
             
         bs = sp[0].shape[0] * 2  # batch size
 
-        return sum(losses) * bs, torch.cat(losses).detach(), torch.cat(accuracies).detach()
+        return sum(losses) * bs, torch.cat(losses_detmean).detach(), torch.cat(accuracies_detmean).detach()
 
     def build_targets(self, sp, tp):
         # Build targets for compute_domain_loss()
