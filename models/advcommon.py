@@ -486,7 +486,7 @@ class Discriminator(nn.Module):
 
 
 class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get c1 from previous layer
-    def __init__(self, c1, num_convs=2, lambda_=0.1):
+    def __init__(self, c1, num_convs=2, num_groups=32, lambda_=0.1):
         super().__init__()
         self.rev = GradientReversal(lambda_=lambda_)
 
@@ -501,7 +501,7 @@ class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get
                     padding=1
                 )
             )
-            dis_tower.append(nn.BatchNorm2d(c1))
+            dis_tower.append(nn.GroupNorm(num_groups, c1))
             dis_tower.append(nn.ReLU())
 
         self.add_module('dis_tower', nn.Sequential(*dis_tower))
@@ -792,10 +792,7 @@ class AutoShape(nn.Module):
     def _apply(self, fn):
         # Apply to(), cpu(), cuda(), half() to model tensors that are not parameters or registered buffers
         self = super()._apply(fn)
-        for i, q in enumerate(self.model.children()):
-            if q._get_name() == 'Detect':
-                m = self.model[i]
-        # m = self.model.model[-1]  # Detect()
+        m = self.model.model[-2]  # Detect()
         m.stride = fn(m.stride)
         m.grid = list(map(fn, m.grid))
         if isinstance(m.anchor_grid, list):

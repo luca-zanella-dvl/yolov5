@@ -110,11 +110,7 @@ class Model(nn.Module):
         self.inplace = self.yaml.get('inplace', True)
 
         # Build strides, anchors
-        for i, q in enumerate(self.model.children()):
-            if q._get_name() == 'Detect':
-                m = self.model[i]
-
-        # m = self.model[-1]  # Detect()
+        m = self.model[-2]  # Detect()
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
@@ -208,11 +204,7 @@ class Model(nn.Module):
 
     def _clip_augmented(self, y):
         # Clip YOLOv5 augmented inference tails
-        for i, q in enumerate(self.model.children()):
-            if q._get_name() == 'Detect':
-                m = self.model[i]
-        # nl = self.model[-1].nl
-        nl = m.nl  # number of detection layers (P3-P5)
+        nl = self.model[-2].nl # number of detection layers (P3-P5)
         g = sum(4 ** x for x in range(nl))  # grid points
         e = 1  # exclude layer count
         i = (y[0].shape[1] // g) * sum(4 ** x for x in range(e))  # indices
@@ -237,10 +229,7 @@ class Model(nn.Module):
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
-        for i, q in enumerate(self.model.children()):
-            if q._get_name() == 'Detect':
-                m = self.model[i]
-        # m = self.model[-1]  # Detect() module
+        m = self.model[-2]  # Detect() module
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
             b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
@@ -248,10 +237,7 @@ class Model(nn.Module):
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def _print_biases(self):
-        for i, q in enumerate(self.model.children()):
-            if q._get_name() == 'Detect':
-                m = self.model[i]
-        # m = self.model[-1]  # Detect() module
+        m = self.model[-2]  # Detect() module
         for mi in m.m:  # from
             b = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
             LOGGER.info(

@@ -360,11 +360,7 @@ def train(hyp, opt, device, callbacks):  # path/to/hyp.yaml or hyp dictionary
         model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
 
     # Model parameters
-    for i, q in enumerate(de_parallel(model).model.children()):
-            if q._get_name() == 'Detect':
-                m = de_parallel(model).model[i]
-    # nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
-    nl = m.nl  # number of detection layers (to scale hyps)
+    nl = de_parallel(model).model[-2].nl  # number of detection layers (to scale hyps)
     hyp["box"] *= 3.0 / nl  # scale to layers
     hyp["cls"] *= nc / 80.0 * 3.0 / nl  # scale to classes and layers
     hyp["obj"] *= (imgsz / 640) ** 2 * 3.0 / nl  # scale to image size and layers
