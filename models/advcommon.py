@@ -619,30 +619,32 @@ class C3TR(nn.Module):
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = Transformer(c2, c2, num_heads, num_layers)
+        # self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = Transformer(c_, c_, num_heads, num_layers)
         
     def forward(self, x, domain):
-        x = self.cv3(torch.cat((self.m1(self.cv1(x, domain), domain), self.cv2(x, domain)), dim=1), domain)
-        feat_map, obj_map = self.m2(x)
-        return x + feat_map, obj_map
+        feat_map, obj_map = self.m2(self.cv1(x, domain))
+        x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
+        # feat_map, obj_map = self.m2(x)
+        return x, obj_map
 
 
 class C3DETRTR(nn.Module):
     # C3 module with DETRTransformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = DETRTransformer(c2, c2, 4, n)
+        # self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = DETRTransformer(c_, c_, num_heads, num_layers)
         
-    def forward(self, x):
-        x = self.cv3(torch.cat((self.m1(self.cv1(x)), self.cv2(x)), dim=1))
-        feat_map, obj_map = self.m2(x)
-        return x + feat_map, obj_map
+    def forward(self, x, domain):
+        feat_map, obj_map = self.m2(self.cv1(x, domain))
+        x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
+        # feat_map, obj_map = self.m2(x)
+        return x, obj_map
 
 
 class C3SPP(C3):
