@@ -272,7 +272,7 @@ class DETRTransformerEncoderLayer(nn.Module):
         normalize_before=False
     ):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.self_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -425,7 +425,7 @@ class TransformerEncoderLayer(nn.Module):
         self.k = nn.Linear(d_model, d_model, bias=False)
         self.v = nn.Linear(d_model, d_model, bias=False)
 
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.self_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
