@@ -113,7 +113,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
     # Run inference
     model.warmup(imgsz=(1, 3, *imgsz), half=half)  # warmup
-    lpd_model.warmup(imgsz=(1, 3, *lpd_imgsz), half=lpd_half)  # warmup
+    if anonymize_lps:
+        lpd_model.warmup(imgsz=(1, 3, *lpd_imgsz), half=lpd_half)  # warmup
     dt, seen = [0.0, 0.0, 0.0], 0
     for path, im, im0s, vid_cap, s in dataset:
         t1 = time_sync()
