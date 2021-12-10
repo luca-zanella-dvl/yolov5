@@ -123,8 +123,7 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 640  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
-            check_anchor_order(m)  # must be in pixel-space (not grid-space)
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True, domain=0)])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
@@ -135,9 +134,6 @@ class Model(nn.Module):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
-        if domain is None and adv: # for initializations during training
-            domain = 0
-        
         if augment:
             return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain)  # augmented inference, None
         return self._forward_once(x, profile, visualize, gamma, validation=validation, domain=domain)  # single-scale inference, train
@@ -174,7 +170,7 @@ class Model(nn.Module):
                     obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                     weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
                     dis_out.append(m(weigh_feat_map))
-            elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR']]):
+            elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR', 'C3SwinTR']]):
                 x, obj_map = m(x, domain)  # run
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
                 x = m(x, domain)  # run
@@ -290,13 +286,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                 BottleneckCSP, C3, C3TR, C3DETRTR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
+                 BottleneckCSP, C3, C3TR, C3DETRTR, C3SwinTR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3TR, C3DETRTR, C3Ghost, C3x]:
+            if m in [BottleneckCSP, C3, C3TR, C3DETRTR, C3SwinTR, C3Ghost, C3x]:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:
