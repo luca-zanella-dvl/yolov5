@@ -3,12 +3,14 @@
 Run inference on images, videos, directories, streams, etc.
 
 Usage:
-    $ python path/to/detect.py --source path/to/img.jpg --weights yolov5s.pt --img 640
+    $ python path/to/anonymize.py --source path/to/img.jpg --weights yolov5s.pt --img 640
 """
 
+VEHICLES = ['car', 'motorcycle', 'truck']
+
 import argparse
+import os
 import sys
-import time
 from pathlib import Path
 
 import cv2
@@ -16,24 +18,25 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 
-FILE = Path(__file__).absolute()
-sys.path.append(FILE.parents[0].as_posix())  # add yolov5/ to path
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]  # YOLOv5 root directory
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-from models.experimental import attempt_load
-from utils.datasets import LoadStreams, LoadImages
-from utils.general import check_img_size, check_requirements, check_imshow, colorstr, is_ascii, non_max_suppression, \
-    apply_classifier, scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
-from utils.plots import Annotator, colors
-from utils.torch_utils import select_device, load_classifier, time_sync
+from models.common import DetectMultiBackend
+from utils.datasets import IMG_FORMATS, VID_FORMATS, LoadImages, LoadStreams
+from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr,
+                           increment_path, non_max_suppression, print_args, scale_coords, strip_optimizer, xyxy2xywh)
+from utils.plots import Annotator, colors, save_one_box
+from utils.torch_utils import select_device, time_sync
 from utils.augmentations import letterbox
 
 
 @torch.no_grad()
-def run(weights='yolov5s.pt',  # model.pt path(s)
-        lpd_weights=None,
-        source='data/images',  # file/dir/URL/glob, 0 for webcam
+def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
+        source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
-        lpd_imgsz=640,
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
@@ -44,89 +47,58 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         save_crop=False,  # save cropped prediction boxes
         nosave=False,  # do not save images/videos
         classes=None,  # filter by class: --class 0, or --class 0 2 3
-        lpd_classes=None,
         agnostic_nms=False,  # class-agnostic NMS
         augment=False,  # augmented inference
         visualize=False,  # visualize features
         update=False,  # update all models
-        project='runs/anonymize',  # save results to project/name
+        project=ROOT / 'runs/anonymize',  # save results to project/name
         name='exp',  # save results to project/name
         exist_ok=False,  # existing project/name ok, do not increment
         line_thickness=3,  # bounding box thickness (pixels)
         hide_labels=False,  # hide labels
         hide_conf=False,  # hide confidences
-        half=False,  # use FP16 half-precision inference,
-        anonymize=False,
+        half=False,  # use FP16 half-precision inference
+        dnn=False,  # use OpenCV DNN for ONNX inference
+        anonymize_heads=False,  # anonymize detected heads
+        anonymize_lps=False,  # anonymize detected license plates
+        lpd_weights=None,  # license plate detection model.pt path(s)
+        lpd_imgsz=640,  # license plate inference size (pixels) 
+        lpd_classes=None,  # filter by class: --class 0, or --class 0 2 3
         ):
+    source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
-    webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-        ('rtsp://', 'rtmp://', 'http://', 'https://'))
+    is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
+    is_url = source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
+    webcam = source.isnumeric() or source.endswith('.txt') or (is_url and not is_file)
+    if is_url and is_file:
+        source = check_file(source)  # download
+    anonymize = anonymize_heads or anonymize_lps
 
     # Directories
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
-    # Initialize
-    set_logging()
-    device = select_device(device)
-    half &= device.type != 'cpu'  # half precision only supported on CUDA
-
     # Load model
-    w = weights[0] if isinstance(weights, list) else weights
-    classify, suffix = False, Path(w).suffix.lower()
-    pt, onnx, tflite, pb, saved_model = (suffix == x for x in ['.pt', '.onnx', '.tflite', '.pb', ''])  # backend
-    stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
-    if pt:
-        model = attempt_load(weights, map_location=device)  # load FP32 model
-        stride = int(model.stride.max())  # model stride
-        names = model.module.names if hasattr(model, 'module') else model.names  # get class names
-        if half:
-            model.half()  # to FP16
-        if classify:  # second-stage classifier
-            modelc = load_classifier(name='resnet50', n=2)  # initialize
-            modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
-    elif onnx:
-        check_requirements(('onnx', 'onnxruntime'))
-        import onnxruntime
-        session = onnxruntime.InferenceSession(w, None)
-    else:  # TensorFlow models
-        check_requirements(('tensorflow>=2.4.1',))
-        import tensorflow as tf
-        if pb:  # https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
-            def wrap_frozen_graph(gd, inputs, outputs):
-                x = tf.compat.v1.wrap_function(lambda: tf.compat.v1.import_graph_def(gd, name=""), [])  # wrapped import
-                return x.prune(tf.nest.map_structure(x.graph.as_graph_element, inputs),
-                               tf.nest.map_structure(x.graph.as_graph_element, outputs))
-
-            graph_def = tf.Graph().as_graph_def()
-            graph_def.ParseFromString(open(w, 'rb').read())
-            frozen_func = wrap_frozen_graph(gd=graph_def, inputs="x:0", outputs="Identity:0")
-        elif saved_model:
-            model = tf.keras.models.load_model(w)
-        elif tflite:
-            interpreter = tf.lite.Interpreter(model_path=w)  # load TFLite model
-            interpreter.allocate_tensors()  # allocate
-            input_details = interpreter.get_input_details()  # inputs
-            output_details = interpreter.get_output_details()  # outputs
-            int8 = input_details[0]['dtype'] == np.uint8  # is TFLite quantized uint8 model
+    device = select_device(device)
+    model = DetectMultiBackend(weights, device=device, dnn=dnn)
+    stride, names, pt, jit, onnx, engine = model.stride, model.names, model.pt, model.jit, model.onnx, model.engine
     imgsz = check_img_size(imgsz, s=stride)  # check image size
-    ascii = is_ascii(names)  # names are ascii (use PIL for UTF-8)
 
-    if lpd_weights is not None:
+    # Half
+    half &= (pt or jit or engine) and device.type != 'cpu'  # half precision only supported by PyTorch on CUDA
+    if pt or jit:
+        model.model.half() if half else model.model.float()
+
+    if anonymize_lps:
         # Load lpd model
-        classify = False
-        lpd_model = attempt_load(lpd_weights, map_location=device)  # load FP32 model
-        lpd_stride = int(lpd_model.stride.max())  # model stride
-        lpd_names = lpd_model.module.names if hasattr(lpd_model, 'module') else lpd_model.names  # get class names
-        if half:
-            lpd_model.half()  # to FP16
-        if classify:  # second-stage classifier
-            lpd_modelc = load_classifier(name='resnet50', n=2)  # initialize
-            lpd_modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
+        lpd_model = DetectMultiBackend(lpd_weights, device=device, dnn=dnn)
+        lpd_stride, lpd_pt, lpd_jit, lpd_engine = lpd_model.stride, lpd_model.pt, lpd_model.jit, lpd_model.engine
         lpd_imgsz = check_img_size(lpd_imgsz, s=lpd_stride)  # check image size
-        lpd_ascii = is_ascii(lpd_names)  # names are ascii (use PIL for UTF-8) 
 
-    vehicles = ['car', 'motorcycle', 'truck']
+        # Half
+        lpd_half = half & (lpd_pt or lpd_jit or lpd_engine) and device.type != 'cpu'  # half precision only supported by PyTorch on CUDA
+        if lpd_pt or lpd_jit:
+            lpd_model.model.half() if lpd_half else lpd_model.model.float()
 
     # Dataloader
     if webcam:
@@ -140,75 +112,52 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
     vid_path, vid_writer = [None] * bs, [None] * bs
 
     # Run inference
-    if pt and device.type != 'cpu':
-        model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
-    t0 = time.time()
-    for path, img, im0s, vid_cap in dataset:
-        if onnx:
-            img = img.astype('float32')
-        else:
-            img = torch.from_numpy(img).to(device)
-            img = img.half() if half else img.float()  # uint8 to fp16/32
-        img = img / 255.0  # 0 - 255 to 0.0 - 1.0
-        if len(img.shape) == 3:
-            img = img[None]  # expand for batch dim
+    model.warmup(imgsz=(1, 3, *imgsz), half=half)  # warmup
+    lpd_model.warmup(imgsz=(1, 3, *lpd_imgsz), half=lpd_half)  # warmup
+    dt, seen = [0.0, 0.0, 0.0], 0
+    for path, im, im0s, vid_cap, s in dataset:
+        t1 = time_sync()
+        im = torch.from_numpy(im).to(device)
+        im = im.half() if half else im.float()  # uint8 to fp16/32
+        im /= 255  # 0 - 255 to 0.0 - 1.0
+        if len(im.shape) == 3:
+            im = im[None]  # expand for batch dim
+        t2 = time_sync()
+        dt[0] += t2 - t1
 
         # Inference
-        t1 = time_sync()
-        if pt:
-            visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-            pred = model(img, augment=augment, visualize=visualize)[0]
-        elif onnx:
-            pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
-        else:  # tensorflow model (tflite, pb, saved_model)
-            imn = img.permute(0, 2, 3, 1).cpu().numpy()  # image in numpy
-            if pb:
-                pred = frozen_func(x=tf.constant(imn)).numpy()
-            elif saved_model:
-                pred = model(imn, training=False).numpy()
-            elif tflite:
-                if int8:
-                    scale, zero_point = input_details[0]['quantization']
-                    imn = (imn / scale + zero_point).astype(np.uint8)  # de-scale
-                interpreter.set_tensor(input_details[0]['index'], imn)
-                interpreter.invoke()
-                pred = interpreter.get_tensor(output_details[0]['index'])
-                if int8:
-                    scale, zero_point = output_details[0]['quantization']
-                    pred = (pred.astype(np.float32) - zero_point) * scale  # re-scale
-            pred[..., 0] *= imgsz[1]  # x
-            pred[..., 1] *= imgsz[0]  # y
-            pred[..., 2] *= imgsz[1]  # w
-            pred[..., 3] *= imgsz[0]  # h
-            pred = torch.tensor(pred)
+        visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+        pred = model(im, augment=augment, visualize=visualize)
+        t3 = time_sync()
+        dt[1] += t3 - t2
 
         # NMS
         pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-        t2 = time_sync()
+        dt[2] += time_sync() - t3
 
         # Second-stage classifier (optional)
-        if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
+        # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
 
         # Process predictions
-        for i, det in enumerate(pred):  # detections per image
+        for i, det in enumerate(pred):  # per image
             to_anonymize = []
-
+            seen += 1
             if webcam:  # batch_size >= 1
-                p, s, im0, frame = path[i], f'{i}: ', im0s[i].copy(), dataset.count
+                p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                s += f'{i}: '
             else:
-                p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
+                p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
 
             p = Path(p)  # to Path
-            save_path = str(save_dir / p.name)  # img.jpg
-            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
-            s += '%gx%g ' % img.shape[2:]  # print string
+            save_path = str(save_dir / p.name)  # im.jpg
+            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
+            s += '%gx%g ' % im.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
-            annotator = Annotator(im0, line_width=line_thickness, pil=not ascii)
+            annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
                 # Rescale boxes from img_size to im0 size
-                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+                det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
 
                 # Print results
                 for c in det[:, -1].unique():
@@ -228,16 +177,14 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
                         annotator.box_label(xyxy, label, color=colors(c, True))
                         if save_crop:
-                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=False, save=False)
+                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
                     if anonymize:
                         sub_im = None
-
                         bbox = torch.tensor(xyxy).view(1, 4).clone().view(-1).numpy().astype(np.int32)
-
                         c = int(cls)
                         label = names[c]
-                        if label in vehicles and lpd_weights is not None:
+                        if label in VEHICLES and anonymize_lps:
                             veh_bbox = torch.from_numpy(bbox).to(device)
                             veh_im0 = im0[veh_bbox[1] : veh_bbox[3], veh_bbox[0] : veh_bbox[2]] 
 
@@ -255,14 +202,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
 
                             # Inference
                             visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-                            lpd_pred = lpd_model(veh_img, augment=augment, visualize=visualize)[0]
+                            lpd_pred = lpd_model(veh_img, augment=augment, visualize=visualize)
 
                             # NMS
                             lpd_pred = non_max_suppression(lpd_pred, conf_thres, iou_thres, lpd_classes, agnostic_nms, max_det=max_det)
-
-                            # Second-stage classifier (optional)
-                            if classify:
-                                lpd_pred = apply_classifier(lpd_pred, lpd_modelc, veh_img, veh_im0)
 
                             if all([lpd_det.nelement() > 0 for lpd_det in lpd_pred]):
                             # Process predictions
@@ -273,32 +216,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                                         for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
                                             lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy().astype(np.int32)
                                             to_anonymize.append((bbox[1] + lp_bbox[1], bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0], bbox[0] + lp_bbox[2]))
-                                            # sub_im = im0[bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3], bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2]]
-                                            # sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                                            # im0[
-                                            #     bbox[1] + lp_bbox[1] : bbox[1] + lp_bbox[3],
-                                            #     bbox[0] + lp_bbox[0] : bbox[0] + lp_bbox[2],
-                                            # ] = sub_im
-                            else:
-                                to_anonymize.append((int((bbox[1] + bbox[3]) / 2), bbox[3], bbox[0], bbox[2]))
-                                # sub_im = im0[
-                                #     int((bbox[1] + bbox[3]) / 2) : bbox[3], 
-                                #     bbox[0] : bbox[2]
-                                # ]
-                                # sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                                # im0[
-                                #     int((bbox[1] + bbox[3]) / 2)  : bbox[3],
-                                #     bbox[0] : bbox[2],
-                                # ] = sub_im
 
-                        elif label == 'head':
+                        elif label == 'head' and anonymize_heads:
                             if bbox[3] > bbox[1] and bbox[2] > bbox[0]:
-                                sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]                                                   
-                                sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
-                                im0[
-                                    bbox[1] : bbox[3],
-                                    bbox[0] : bbox[2],
-                                ] = sub_im
+                                to_anonymize.append((bbox[1], bbox[3], bbox[0], bbox[2]))
 
             for miny, maxy, minx, maxx in to_anonymize:
                 sub_im = im0[miny : maxy, minx : maxx]
@@ -308,8 +229,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                     minx : maxx,
                 ] = sub_im
 
-            # Print time (inference + NMS)
-            print(f'{s}Done. ({t2 - t1:.3f}s)')
+            # Print time (inference-only)
+            LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
 
             # Stream results
             im0 = annotator.result()
@@ -335,24 +256,22 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
-    
+
+    # Print results
+    t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
+    LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
     if save_txt or save_img or anonymize:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-        print(f"Results saved to {colorstr('bold', save_dir)}{s}")
-
+        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
     if update:
         strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
-
-    print(f'Done. ({time.time() - t0:.3f}s)')
 
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--lpd-weights', nargs='+', type=str, default=None, help='lpd model.pt path(s)')
-    parser.add_argument('--source', type=str, default='data/images', help='file/dir/URL/glob, 0 for webcam')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
+    parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--lpd-imgsz', '--lpd-img', '--lpd-img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
@@ -362,27 +281,34 @@ def parse_opt():
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
     parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
-    parser.add_argument('--lpd_classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
+    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--visualize', action='store_true', help='visualize features')
     parser.add_argument('--update', action='store_true', help='update all models')
-    parser.add_argument('--project', default='runs/anonymize', help='save results to project/name')
+    parser.add_argument('--project', default=ROOT / 'runs/anonymize', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--line-thickness', default=3, type=int, help='bounding box thickness (pixels)')
     parser.add_argument('--hide-labels', default=False, action='store_true', help='hide labels')
     parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
-    parser.add_argument('--anonymize', action='store_true', help='anonymize detected boxes')
+    parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    parser.add_argument('--anonymize-heads', default=False, action='store_true', help='anonymize detected heads')
+    parser.add_argument('--anonymize-lps', default=False, action='store_true', help='anonymize detected license plates')
+    parser.add_argument('--lpd-weights', default=None, help='license plate detection model.pt path(s)')
+    parser.add_argument('--lpd-imgsz', '--lpd-img', '--lpd-img-size', nargs='+', type=int, default=[640], help='inference size h,w')
+    parser.add_argument('--lpd-classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
+    opt.lpd_imgsz *= 2 if len(opt.lpd_imgsz) == 1 else 1  # expand
+    if opt.anonymize_lps and (opt.lpd_weights is None):
+        parser.error("--anonymize-lps requires --lpd-weights.")
+    print_args(FILE.stem, opt)
     return opt
 
 
 def main(opt):
-    print(colorstr('detect: ') + ', '.join(f'{k}={v}' for k, v in vars(opt).items()))
     check_requirements(exclude=('tensorboard', 'thop'))
     run(**vars(opt))
 
