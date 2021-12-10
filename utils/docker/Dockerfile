@@ -21,8 +21,8 @@ RUN pip install --no-cache -r requirements.txt albumentations wandb gsutil noteb
     --extra-index-url https://download.pytorch.org/whl/cu113
 
 # Create working directory
-RUN mkdir -p /usr/src/app
-WORKDIR /usr/src/app
+RUN mkdir -p /source
+WORKDIR /source
 
 # Copy contents
 COPY . /usr/src/app
