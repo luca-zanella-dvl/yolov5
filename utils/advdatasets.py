@@ -121,12 +121,12 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
     return dataloader, dataset
 
 
-def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0, 
+def create_adv_dataloaders(path_s, path_t, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0, 
                             rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix=''):
     half_batch = batch_size // 2
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache.
     with torch_distributed_zero_first(rank):
-        source_dataset = LoadImagesAndLabels(source_path, imgsz, half_batch,
+        dataset_s = LoadImagesAndLabels(path_s, imgsz, half_batch,
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
@@ -136,7 +136,7 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       pad=pad,
                                       image_weights=image_weights,
                                       prefix=prefix)
-        target_dataset = LoadImagesWoLabels(target_path, imgsz, half_batch,
+        dataset_t = LoadImagesWoLabels(path_t, imgsz, half_batch,
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
@@ -147,25 +147,25 @@ def create_adv_dataloaders(source_path, target_path, imgsz, batch_size, stride, 
                                       image_weights=image_weights,
                                       prefix=prefix)
 
-    half_batch = min(half_batch, len(source_dataset), len(target_dataset))
+    half_batch = min(half_batch, len(dataset_s), len(dataset_t))
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, workers])  # number of workers
     half_nw = nw // 2
-    source_sampler = torch.utils.data.distributed.DistributedSampler(source_dataset) if rank != -1 else None
-    target_sampler = torch.utils.data.distributed.DistributedSampler(target_dataset) if rank != -1 else None
+    sampler_s = torch.utils.data.distributed.DistributedSampler(dataset_s) if rank != -1 else None
+    sampler_t = torch.utils.data.distributed.DistributedSampler(dataset_t) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
-    source_dataloader = loader(source_dataset,
+    dataloader_s = loader(dataset_s,
                         batch_size=half_batch,
                         num_workers=half_nw,
-                        sampler=source_sampler,
+                        sampler=sampler_s,
                         pin_memory=True,
                         collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
-    target_dataloader = loader(target_dataset,
+    dataloader_t = loader(dataset_t,
                         batch_size=half_batch,
                         num_workers=half_nw,
-                        sampler=target_sampler,
+                        sampler=sampler_t,
                         pin_memory=True,
                         collate_fn=LoadImagesWoLabels.collate_fn4 if quad else LoadImagesWoLabels.collate_fn)
-    return source_dataloader, source_dataset, target_dataloader, target_dataset
+    return dataloader_s, dataset_s, dataloader_t, dataset_t
 
 
 class InfiniteDataLoader(torch.utils.data.dataloader.DataLoader):

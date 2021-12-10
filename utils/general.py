@@ -17,6 +17,7 @@ import urllib
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+import sys
 from subprocess import check_output
 from zipfile import ZipFile
 
@@ -40,6 +41,8 @@ os.environ['NUMEXPR_MAX_THREADS'] = str(min(os.cpu_count(), 8))  # NumExpr max t
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
+
+adv = True if 'adv' in Path(sys.argv[0]).stem else False
 
 
 class Profile(contextlib.ContextDecorator):
@@ -349,7 +352,9 @@ def check_dataset(data, autodownload=True):
     # Parse yaml
     path = extract_dir or Path(data.get('path') or '')  # optional 'path' default to '.'
     # for k in 'train', 'val', 'test':
-    for k in 'train', 'val', 'test', 'extra', 'pseudo':
+    prep_path = ['train', 'val', 'test', 'extra', 'pseudo'] 
+    if adv: prep_path.remove('val') # don't prepend path to val if adv
+    for k in prep_path:
         if data.get(k):  # prepend path
             data[k] = str(path / data[k]) if isinstance(data[k], str) else [str(path / x) for x in data[k]]
 
