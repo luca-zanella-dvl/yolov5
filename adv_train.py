@@ -517,7 +517,6 @@ def parse_opt(known=False):
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
     parser.add_argument('--pseudo', action='store_true', help='semi-supervised learning')
     parser.add_argument('--delta', type=float, default=5.0, help='Smoothness of the domain adaptation change')
-    parser.add_argument('--adv', action='store_true', help='adversarial domain adaptation')
 
     # Weights & Biases arguments
     parser.add_argument('--entity', default=None, help='W&B: Entity')

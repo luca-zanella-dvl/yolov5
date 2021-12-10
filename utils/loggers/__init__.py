@@ -6,6 +6,11 @@ Logging utils
 import os
 import warnings
 
+from pathlib import Path
+import sys
+
+adv = True if 'adv' in Path(sys.argv[0]).stem else False
+
 import pkg_resources as pkg
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -56,7 +61,7 @@ class Loggers():
             'x/lr0',
             'x/lr1',
             'x/lr2']  # params
-        if self.opt.adv:
+        if adv:
             self.adv_keys = ['train/domain_loss_small', 'train/domain_loss_medium', 'train/domain_loss_large', # adversarial train loss
                              'train/domain_accuracy_small', 'train/domain_accuracy_medium', 'train/domain_accuracy_large'] # adversarial train accuracy
             self.keys += self.adv_keys
