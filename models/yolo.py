@@ -123,7 +123,10 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 640  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True, domain=0)])  # forward
+            if adv:
+                m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True, domain=0)])  # forward
+            else:
+                m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True)])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
