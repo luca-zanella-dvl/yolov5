@@ -257,6 +257,7 @@ fabric.properties
 
 # Manually added
 experiments/
+scripts/
 datasets/
 raw/
 bash/
