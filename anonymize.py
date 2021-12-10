@@ -296,8 +296,8 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                                 sub_im = im0[bbox[1] : bbox[3], bbox[0] : bbox[2]]                                                   
                                 sub_im = cv2.GaussianBlur(sub_im, (45, 45), 30)
                                 im0[
-                                    bbox[1] : bbox[1] + sub_im.shape[0],
-                                    bbox[0] : bbox[0] + sub_im.shape[1],
+                                    bbox[1] : bbox[3],
+                                    bbox[0] : bbox[2],
                                 ] = sub_im
 
             for miny, maxy, minx, maxx in to_anonymize:
