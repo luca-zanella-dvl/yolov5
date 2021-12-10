@@ -121,6 +121,37 @@ python detect.py --source 0  # webcam
 </details>
 
 <details>
+<summary>Anonymize with anonymize.py</summary>
+   
+`anonymize.py` runs heads and license plates anonymization on a variety of sources, saving results to `runs/anonymize`.
+  
+Run commands below to anonymize heads.
+   
+```bash
+$ python anonymize.py --weights weights/crowdhuman1280x_yolov5x6.pt --classes 0 --imgsz 1280 --anonymize-heads --source 0  # webcam 
+                                                                                                                        img.jpg  # image
+                                                                                                                        vid.mp4  # video
+                                                                                                                        path/  # directory
+                                                                                                                        path/*.jpg  # glob
+                                                                                                                        'https://youtu.be/Zgi9g1ksQHc'  # YouTube
+                                                                                                                        'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
+```
+
+Run commands below to anonymize license plates.
+   
+```bash
+$ python anonymize.py --weights weights/yolov5x6.pt --lpd-weights lpd_yolov5x.pt --classes 2 3 7 --imgsz 1280 --lpd-imgsz 640 --anonymize-lps --source 0  # webcam 
+                                                                                                                                                       img.jpg  # image
+                                                                                                                                                       vid.mp4  # video
+                                                                                                                                                       path/  # directory
+                                                                                                                                                       path/*.jpg  # glob
+                                                                                                                                                       'https://youtu.be/Zgi9g1ksQHc'  # YouTube                      
+                                                                                                                                                       'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
+```
+   
+</details>
+
+<details>
 <summary>Training</summary>
 
 The commands below reproduce YOLOv5 [COCO](https://github.com/ultralytics/yolov5/blob/master/data/scripts/get_coco.sh)
