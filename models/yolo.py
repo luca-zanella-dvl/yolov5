@@ -135,7 +135,7 @@ class Model(nn.Module):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
-        if domain is None and adv: # for initializations and validation during training
+        if domain is None and adv: # for initializations during training
             domain = 0
         
         if augment:

@@ -62,11 +62,11 @@ class AlbumentationsWoLabels:
                 A.ImageCompression(quality_lower=75, p=0.0)],
                 bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
 
-            logging.info(colorstr('albumentations: ') + ', '.join(f'{x}' for x in self.transform.transforms if x.p))
+            LOGGER.info(colorstr('albumentations: ') + ', '.join(f'{x}' for x in self.transform.transforms if x.p))
         except ImportError:  # package not installed, skip
             pass
         except Exception as e:
-            logging.info(colorstr('albumentations: ') + f'{e}')
+            LOGGER.info(colorstr('albumentations: ') + f'{e}')
 
     def __call__(self, im, p=1.0):
         if self.transform and random.random() < p:
@@ -262,6 +262,7 @@ def copy_paste_wo_labels(im, p=0.5):
 
     return im
 
+
 def copy_paste(im, labels, segments, p=0.5):
     # Implement Copy-Paste augmentation https://arxiv.org/abs/2012.07177, labels as nx5 np.array(cls, xyxy)
     n = len(segments)
@@ -319,6 +320,7 @@ def mixup(im, labels, im2, labels2):
     im = (im * r + im2 * (1 - r)).astype(np.uint8)
     labels = np.concatenate((labels, labels2), 0)
     return im, labels
+
 
 def mixup_wo_labels(im, im2):
     # Applies MixUp augmentation https://arxiv.org/pdf/1710.09412.pdf
