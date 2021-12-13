@@ -264,3 +264,6 @@ bash/
 build-devel.sh
 run-devel.sh
 run-devel.sh.save
+.bash_history
+.config/
+.netrc
