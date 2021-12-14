@@ -123,10 +123,7 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 640  # 2x min stride
             m.inplace = self.inplace
-            if adv:
-                m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True, domain=0)])  # forward
-            else:
-                m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True)])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s), validation=True)])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()  # only run once
@@ -137,6 +134,9 @@ class Model(nn.Module):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
+        if domain is None and adv: # for initializations and jit trace during training
+            domain = 0
+
         if augment:
             return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain)  # augmented inference, None
         return self._forward_once(x, profile, visualize, gamma, validation=validation, domain=domain)  # single-scale inference, train
