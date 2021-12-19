@@ -762,11 +762,10 @@ class SwinTransformer(nn.Module):
         return x
         
 
-class DiscriminatorConv(nn.Module):
+class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get c1 from previous layer
     def __init__(self, c1, num_convs=2, lambda_=0.1):
         super().__init__()
-        self.lambda_ = lambda_
-        self.rev = GradientReversal()
+        self.rev = GradientReversal(lambda_=lambda_)
 
         dis_tower = []
         for _ in range(num_convs):
@@ -797,10 +796,8 @@ class DiscriminatorConv(nn.Module):
                     torch.nn.init.constant_(l.bias, 0)
     
     def forward(self, x, epoch):
-        if epoch < 3:
-            x = self.rev(x, lambda_=0.)
-        else:
-            x = self.rev(x, lambda_=self.lambda_)
+        if epoch > 2:
+            x = self.rev(x)
         
         x = self.dis_tower(x)
         x = self.cls_logits(x)
@@ -808,9 +805,12 @@ class DiscriminatorConv(nn.Module):
 
 
 class GradientReversal(torch.nn.Module):
+    def __init__(self, lambda_=1):
+        super(GradientReversal, self).__init__()
+        self.lambda_ = lambda_
 
-    def forward(self, x, lambda_):
-        return GradientReversalFunction.apply(x, lambda_)
+    def forward(self, x):
+        return GradientReversalFunction.apply(x, self.lambda_)
 
 
 class GradientReversalFunction(Function):
