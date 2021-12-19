@@ -762,31 +762,11 @@ class SwinTransformer(nn.Module):
         return x
         
 
-class Discriminator(nn.Module):
-    def __init__(self, c1, c2, lambda_=0.1, activation="relu"):
-        super().__init__()
-        self.rev = GradientReversal(lambda_=lambda_)
-
-        self.flatten = nn.Flatten()
-        self.linear1 = nn.LazyLinear(c1)
-        self.linear2 = nn.Linear(c1, c2)
-        self.classifier = nn.Linear(c2, 1)
-        self.activation = _get_activation_fn(activation)
-    
-    def forward(self, x):
-        x = self.rev(x)
-        
-        x = self.flatten(x)
-        x = self.activation(self.linear1(x), inplace=False)
-        x = self.activation(self.linear2(x), inplace=False)
-        x = self.classifier(x)
-        return x
-
-
-class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get c1 from previous layer
+class DiscriminatorConv(nn.Module):
     def __init__(self, c1, num_convs=2, lambda_=0.1):
         super().__init__()
-        self.rev = GradientReversal(lambda_=lambda_)
+        self.lambda_ = lambda_
+        self.rev = GradientReversal()
 
         dis_tower = []
         for _ in range(num_convs):
@@ -816,8 +796,11 @@ class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get
                     torch.nn.init.normal_(l.weight, std=0.01)
                     torch.nn.init.constant_(l.bias, 0)
     
-    def forward(self, x):
-        x = self.rev(x)
+    def forward(self, x, epoch):
+        if epoch < 3:
+            x = self.rev(x, lambda_=0.)
+        else:
+            x = self.rev(x, lambda_=self.lambda_)
         
         x = self.dis_tower(x)
         x = self.cls_logits(x)
@@ -825,12 +808,9 @@ class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get
 
 
 class GradientReversal(torch.nn.Module):
-    def __init__(self, lambda_=1):
-        super(GradientReversal, self).__init__()
-        self.lambda_ = lambda_
 
-    def forward(self, x):
-        return GradientReversalFunction.apply(x, self.lambda_)
+    def forward(self, x, lambda_):
+        return GradientReversalFunction.apply(x, lambda_)
 
 
 class GradientReversalFunction(Function):

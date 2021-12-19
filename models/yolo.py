@@ -133,29 +133,29 @@ class Model(nn.Module):
         self.info()
         LOGGER.info('')
 
-    def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None):
+    def forward(self, x, augment=False, profile=False, visualize=False, gamma=0., validation=False, domain=None, epoch=3):
         if domain is None and adv: # for initializations and jit trace during training
             domain = 0
 
         if augment:
-            return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain)  # augmented inference, None
-        return self._forward_once(x, profile, visualize, gamma, validation=validation, domain=domain)  # single-scale inference, train
+            return self._forward_augment(x, gamma=gamma, validation=validation, domain=domain, epoch=epoch)  # augmented inference, None
+        return self._forward_once(x, profile, visualize, gamma, validation=validation, domain=domain, epoch=epoch)  # single-scale inference, train
 
-    def _forward_augment(self, x, gamma=0., validation=False, domain=None):
+    def _forward_augment(self, x, gamma=0., validation=False, domain=None, epoch=3):
         img_size = x.shape[-2:]  # height, width
         s = [1, 0.83, 0.67]  # scales
         f = [None, 3, None]  # flips (2-ud, 3-lr)
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
-            yi = self._forward_once(xi, gamma=gamma, validation=validation, domain=domain)[0]  # forward
+            yi = self._forward_once(xi, gamma=gamma, validation=validation, domain=domain, epoch=epoch)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
 
-    def _forward_once(self, x, profile=False, visualize=False, gamma=0., validation=False, domain=None):
+    def _forward_once(self, x, profile=False, visualize=False, gamma=0., validation=False, domain=None, epoch=3):
         y, dt, dis_out = [], [], [] # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
@@ -172,7 +172,7 @@ class Model(nn.Module):
                     # Nx1xHxW to Nx3xHxW
                     obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                     weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
-                    dis_out.append(m(weigh_feat_map))
+                    dis_out.append(m(weigh_feat_map, epoch))
             elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR', 'C3SwinTR']]):
                 x, obj_map = m(x, domain)  # run
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):

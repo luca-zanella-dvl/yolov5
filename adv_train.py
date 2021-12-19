@@ -344,10 +344,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
 
                 pred_s, domain_pred_s = model(
-                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0
+                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0, epoch=epoch
                 )  # forward
                 pred_t, domain_pred_t = model(
-                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1
+                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
                 )  # forward
 
                 loss, loss_items = compute_loss(
