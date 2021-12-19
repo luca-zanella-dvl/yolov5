@@ -164,8 +164,8 @@ class PositionEmbeddingLearned(nn.Module):
     """
     def __init__(self, num_pos_feats=256):
         super().__init__()
-        self.row_embed = nn.Embedding(50, num_pos_feats)
-        self.col_embed = nn.Embedding(50, num_pos_feats)
+        self.row_embed = nn.Embedding(80, num_pos_feats)
+        self.col_embed = nn.Embedding(80, num_pos_feats)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -915,14 +915,13 @@ class C3DETRTR(nn.Module):
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        # self.m1 = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = DETRTransformer(c_, c_, num_heads, num_layers)
+        self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = DETRTransformer(c2, c2, num_heads, num_layers)
         
     def forward(self, x, domain):
-        feat_map, obj_map = self.m2(self.cv1(x, domain))
-        x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
-        # feat_map, obj_map = self.m2(x)
-        return x, obj_map
+        x = self.cv3(torch.cat((self.m1(self.cv1(x, domain), domain), self.cv2(x, domain)), dim=1), domain)
+        feat_map, obj_map = self.m2(x)
+        return x + feat_map, obj_map
 
 
 class C3SwinTR(C3):
