@@ -238,8 +238,9 @@ class DETRTransformer(nn.Module):
         # 2. reshape the resulting vector to H_s x W_s
         obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        obj_map = obj_map - obj_map.min(1, keepdim=True)[0]
-        obj_map = obj_map / obj_map.max(1, keepdim=True)[0]
+        obj_map_min = torch.min(obj_map)
+        obj_map_max = torch.max(obj_map)
+        obj_map = (obj_map - obj_map_min) / (obj_map_max - obj_map_min)
         obj_map = torch.nan_to_num(obj_map)
         return memory.permute(1, 2, 0).view(bs, c, h, w), obj_map  # G_s, A_s
 
