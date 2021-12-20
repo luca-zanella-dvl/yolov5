@@ -90,12 +90,13 @@ class Conv(nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
-        # self.bn = nn.BatchNorm2d(c2)
-        self.bn = DomainSpecificBatchNorm2d(c2, 2) # 2 domains, source and target
+        self.bn = nn.BatchNorm2d(c2)
+        # self.bn = DomainSpecificBatchNorm2d(c2, 2) # 2 domains, source and target
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x, domain):
-        return self.act(self.bn(self.conv(x), domain))
+        return self.act(self.bn(self.conv(x)))
+        # return self.act(self.bn(self.conv(x), domain))
 
     def forward_fuse(self, x):
         return self.act(self.conv(x))
@@ -164,8 +165,8 @@ class PositionEmbeddingLearned(nn.Module):
     """
     def __init__(self, num_pos_feats=256):
         super().__init__()
-        self.row_embed = nn.Embedding(80, num_pos_feats)
-        self.col_embed = nn.Embedding(80, num_pos_feats)
+        self.row_embed = nn.Embedding(85, num_pos_feats)
+        self.col_embed = nn.Embedding(85, num_pos_feats)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -762,7 +763,7 @@ class SwinTransformer(nn.Module):
         return x
         
 
-class DiscriminatorConv(nn.Module): # need to change parse_model and yaml to get c1 from previous layer
+class DiscriminatorConv(nn.Module):
     def __init__(self, c1, num_convs=2, lambda_=0.1):
         super().__init__()
         self.rev = GradientReversal(lambda_=lambda_)
@@ -891,25 +892,28 @@ class C3(nn.Module):
 
 class C3TR(nn.Module):
     # C3 module with Transformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=2, num_layers=6):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        # self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        self.m2 = Transformer(c_, c_, num_heads, num_layers)
+        self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m2 = Transformer(c2, c2, num_heads, num_layers)
+        # self.m2 = Transformer(c_, c_, num_heads, num_layers)
         
     def forward(self, x, domain):
-        feat_map, obj_map = self.m2(self.cv1(x, domain))
-        x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
-        # feat_map, obj_map = self.m2(x)
-        return x, obj_map
+        x = self.cv3(torch.cat((self.m1(self.cv1(x, domain), domain), self.cv2(x, domain)), dim=1), domain)
+        feat_map, obj_map = self.m2(x)
+        return x + feat_map, obj_map
+        # feat_map, obj_map = self.m2(self.cv1(x, domain))
+        # x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
+        # return x, obj_map
 
 
 class C3DETRTR(nn.Module):
     # C3 module with DETRTransformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=2, num_layers=6):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -917,11 +921,15 @@ class C3DETRTR(nn.Module):
         self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
         self.m1 = mySequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
         self.m2 = DETRTransformer(c2, c2, num_heads, num_layers)
+        # self.m2 = Transformer(c_, c_, num_heads, num_layers)
         
     def forward(self, x, domain):
         x = self.cv3(torch.cat((self.m1(self.cv1(x, domain), domain), self.cv2(x, domain)), dim=1), domain)
         feat_map, obj_map = self.m2(x)
         return x + feat_map, obj_map
+        # feat_map, obj_map = self.m2(self.cv1(x, domain))
+        # x = self.cv3(torch.cat((feat_map, self.cv2(x, domain)), dim=1), domain)
+        # return x, obj_map
 
 
 class C3SwinTR(C3):
