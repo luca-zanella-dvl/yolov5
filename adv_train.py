@@ -360,6 +360,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    domain_loss *= WORLD_SIZE
                 if opt.quad:
                     loss *= 4.
             total_loss = loss + domain_loss
