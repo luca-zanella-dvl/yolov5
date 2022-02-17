@@ -137,7 +137,7 @@ def run(
                             for label in labels:
                                 lp_xywh = np.asarray(label.split()[1:], dtype=np.float32)
                                 lp_xyxy = xywh2xyxy(lp_xywh * [[w, h, w, h]])  # xyxy pixels
-                                lp_xyxy = lp_xyxy.reshape(1, 4).copy().reshape(-1).astype(np.int32)
+                                lp_xyxy = lp_xyxy.reshape(1, 4).copy().reshape(-1).round()
                                 if lp_xyxy[0] >= veh_xyxy[0] and lp_xyxy[1] >= veh_xyxy[1] and lp_xyxy[2] <= veh_xyxy[2] and lp_xyxy[3] <= veh_xyxy[3]:
                                     lp_xyxys.append(lp_xyxy) 
                         if lp_xyxys:
