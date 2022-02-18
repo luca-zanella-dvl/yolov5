@@ -861,12 +861,18 @@ class C3DETRTR(C3):
 
 
 class C3SwinTR(C3):
-    # C3 module with DETRTransformer()
+    # C3 module with SwinTransformer()
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
-        self.m = SwinTransformer(c_, c_, num_heads, num_layers)
+        self.m = SwinTransformer(c_, c_, c_//32, n)
 
+class C3STR(C3):
+    # C3 module with SwinTransformerBlock()
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = SwinTransformer(c_, c_, c_//32, n)
 
 class C3SPP(C3):
     # C3 module with SPP()
