@@ -102,7 +102,7 @@ def run(data,
         save_hybrid=False,  # save label+prediction hybrid results to *.txt
         save_conf=False,  # save confidences in --save-txt labels
         save_json=False,  # save a COCO-JSON results file
-        project=ROOT / 'runs/val',  # save to project/name
+        project=ROOT / 'runs/grn',  # save to project/name
         name='exp',  # save to project/name
         exist_ok=False,  # existing project/name ok, do not increment
         half=False,  # use FP16 half-precision inference
@@ -115,6 +115,7 @@ def run(data,
         compute_loss=None,
         lpd_weights=None,  # license plate detection model.pt path(s)
         lpd_imgsz=640,  # license plate inference size (pixels) 
+        lpd_conf_thres=0.001,  # confidence threshold
         cropped=False,
         ):
     # Initialize/load model and set device
@@ -222,7 +223,7 @@ def run(data,
                 im0 = cv2.imread(str(path))
                 if len(pred):
                     # Rescale boxes from img_size to im0 size
-                    pred[:, :4] = scale_coords(im[si].shape[1:], pred[:, :4], shape).round()
+                    pred[:, :4] = scale_coords(im[si].shape[1:], pred[:, :4], shape)
                     for *xyxy, conf, cls in reversed(pred):
                         c = int(cls)
                         label = names[c]
@@ -242,19 +243,19 @@ def run(data,
                                 veh_img = veh_img[None]  # expand for batch dim
                             lp_out, lp_train_out = lpd_model(veh_img) if training else lpd_model(veh_img, augment=augment, val=True)  # inference, loss outputs
                             # NMS
-                            lp_out = non_max_suppression(lp_out, conf_thres, iou_thres)
+                            lp_out = non_max_suppression(lp_out, lpd_conf_thres, iou_thres)
                             # Process predictions
                             for i, lpd_det in enumerate([lpd_det for lpd_det in lp_out if lpd_det.nelement() > 0 ]):  # detections per image
                                     # Rescale boxes from veh_img_size to veh_im0 size
-                                    lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape).round()
+                                    lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape)
 
                                     for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
-                                        lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy().round()
+                                        lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy()
                                         lp_pred = torch.tensor((veh_xyxy[0] + lp_bbox[0], veh_xyxy[1] + lp_bbox[1], veh_xyxy[0] + lp_bbox[2], veh_xyxy[1] + lp_bbox[3], lpd_conf, lpd_cls)).to(device)
                                         lp_preds.append(lp_pred)
 
                     lp_preds = torch.stack(lp_preds)
-                    lp_preds[:, :4] = scale_coords_inv(im[si].shape[1:], lp_preds[:, :4], shape, shapes[si][1]).round()
+                    lp_preds[:, :4] = scale_coords_inv(im[si].shape[1:], lp_preds[:, :4], shape, shapes[si][1])
                     lp_outs.append(lp_preds)
 
             # for si, lp_pred in enumerate(lp_outs):  # per image
@@ -263,9 +264,12 @@ def run(data,
             #         lp_im0 = im0[lp_bbox[1]:lp_bbox[3], lp_bbox[0]:lp_bbox[2]]
             #         cv2.imshow('image', lp_im0)
             #         cv2.waitKey(0)
+
+            # NMS
             out = lp_outs
 
         if cropped:
+            names_copy = names
             names = lpd_names
         
         # Metrics
@@ -312,6 +316,11 @@ def run(data,
             Thread(target=plot_images, args=(im, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(im, output_to_target(out), paths, f, names), daemon=True).start()
+
+        names = names_copy
+
+    if cropped:
+        names = lpd_names
 
     # Compute metrics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
@@ -398,13 +407,14 @@ def parse_opt():
     parser.add_argument('--save-hybrid', action='store_true', help='save label+prediction hybrid results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
     parser.add_argument('--save-json', action='store_true', help='save a COCO-JSON results file')
-    parser.add_argument('--project', default=ROOT / 'runs/val', help='save to project/name')
+    parser.add_argument('--project', default=ROOT / 'runs/grn', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     parser.add_argument('--lpd-weights', default=None, help='license plate detection model.pt path(s)')
     parser.add_argument('--lpd-imgsz', '--lpd-img', '--lpd-img-size', type=int, default=640, help='inference size h,w')
+    parser.add_argument('--lpd-conf-thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--cropped', action='store_true', help='use model trained on cropped car images')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
@@ -418,8 +428,12 @@ def main(opt):
     check_requirements(requirements=ROOT / 'requirements.txt', exclude=('tensorboard', 'thop'))
 
     if opt.task in ('train', 'val', 'test'):  # run normally
-        if opt.conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
-            LOGGER.info(f'WARNING: confidence threshold {opt.conf_thres} >> 0.001 will produce invalid mAP values.')
+        if opt.cropped:
+            if opt.lpd_conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
+                LOGGER.info(f'WARNING: confidence threshold {opt.lpd_conf_thres} >> 0.001 will produce invalid mAP values.')
+        else:
+            if opt.conf_thres > 0.001:  # https://github.com/ultralytics/yolov5/issues/1466
+                LOGGER.info(f'WARNING: confidence threshold {opt.conf_thres} >> 0.001 will produce invalid mAP values.')
         run(**vars(opt))
 
     else:
@@ -428,6 +442,8 @@ def main(opt):
         if opt.task == 'speed':  # speed benchmarks
             # python val.py --task speed --data coco.yaml --batch 1 --weights yolov5n.pt yolov5s.pt...
             opt.conf_thres, opt.iou_thres, opt.save_json = 0.25, 0.45, False
+            if opt.cropped:
+                opt.lpd_conf_thres = 0.25
             for opt.weights in weights:
                 run(**vars(opt), plots=False)
 
