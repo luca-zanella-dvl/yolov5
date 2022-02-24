@@ -217,46 +217,46 @@ def run(data,
         if cropped:
             lp_outs = []
             # Process predictions
+            k = 0
             for si, pred in enumerate(out):  # per image
                 lp_preds = []
                 path, shape = Path(paths[si]), shapes[si][0]
                 im0 = cv2.imread(str(path))
                 if len(pred):
-                    # Rescale boxes from img_size to im0 size
-                    pred[:, :4] = scale_coords(im[si].shape[1:], pred[:, :4], shape)
-                    for *xyxy, conf, cls in reversed(pred):
+                    for *xyxy, conf, cls in reversed(pred):  # per detection
                         c = int(cls)
                         label = names[c]
                         if label in VEHICLES:
                             veh_xyxy = torch.tensor(xyxy).view(1, 4).clone().view(-1).numpy().astype(np.int32)
-                            veh_im0 = im0[veh_xyxy[1]:veh_xyxy[3],veh_xyxy[0]:veh_xyxy[2]]
+                            veh_im = im[si, :, veh_xyxy[1]:veh_xyxy[3],veh_xyxy[0]:veh_xyxy[2]]
+                            veh_im = veh_im.permute(1, 2, 0)
                             # Padded resize
-                            veh_img = letterbox(veh_im0, lpd_imgsz, stride=lpd_stride, auto=True)[0]
+                            veh_img = letterbox(veh_im.cpu().detach().numpy(), lpd_imgsz, stride=lpd_stride, auto=True)[0]
                             # Convert
-                            veh_img = veh_img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                            veh_img = veh_img.transpose((2, 0, 1))  # HWC to CHW
                             veh_img = np.ascontiguousarray(veh_img) 
-
                             veh_img = torch.from_numpy(veh_img).to(device)
                             veh_img = veh_img.half() if half else veh_img.float()  # uint8 to fp16/32
-                            veh_img = veh_img / 255.0  # 0 - 255 to 0.0 - 1.0
+                            
                             if len(veh_img.shape) == 3:
                                 veh_img = veh_img[None]  # expand for batch dim
-                            lp_out, lp_train_out = lpd_model(veh_img) if training else lpd_model(veh_img, augment=augment, val=True)  # inference, loss outputs
-                            # NMS
-                            lp_out = non_max_suppression(lp_out, lpd_conf_thres, iou_thres)
-                            # Process predictions
-                            for i, lpd_det in enumerate([lpd_det for lpd_det in lp_out if lpd_det.nelement() > 0 ]):  # detections per image
-                                    # Rescale boxes from veh_img_size to veh_im0 size
-                                    lpd_det[:, :4] = scale_coords(veh_img.shape[2:], lpd_det[:, :4], veh_im0.shape)
+                            # (center x, center y, width, height, obj_conf, cls_conf)
+                            lp_out, _ = lpd_model(veh_img) if training else lpd_model(veh_img, augment=augment, val=True)  # inference, loss outputs
+                            for si, lp_pred in enumerate(lp_out):  # per image
+                                # Process predictions
+                                lp_pred[:, :4] = xywh2xyxy(lp_pred[:, :4])
+                                lp_pred[:, :4] = scale_coords(veh_img.shape[2:], lp_pred[:, :4], veh_im.shape)
+                                lp_pred[:, :4] += torch.tensor((xyxy[0], xyxy[1], xyxy[0], xyxy[1])).view(1, 4).clone().view(-1).to(device)
+                                lp_pred[:, :4] = xyxy2xywh(lp_pred[:, :4])     
+                                lp_preds.append(lp_pred)
 
-                                    for *lpd_xyxy, lpd_conf, lpd_cls in reversed(lpd_det):
-                                        lp_bbox = (torch.tensor(lpd_xyxy).view(1, 4)).view(-1).numpy()
-                                        lp_pred = torch.tensor((veh_xyxy[0] + lp_bbox[0], veh_xyxy[1] + lp_bbox[1], veh_xyxy[0] + lp_bbox[2], veh_xyxy[1] + lp_bbox[3], lpd_conf, lpd_cls)).to(device)
-                                        lp_preds.append(lp_pred)
+                lp_preds = torch.cat(lp_preds)
+                # NMS
+                lp_out = non_max_suppression(torch.unsqueeze(lp_preds, 0), lpd_conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls)
+                lp_out = torch.cat(lp_out)
+                lp_outs.append(lp_out)
 
-                    lp_preds = torch.stack(lp_preds)
-                    lp_preds[:, :4] = scale_coords_inv(im[si].shape[1:], lp_preds[:, :4], shape, shapes[si][1])
-                    lp_outs.append(lp_preds)
+            out = lp_outs
 
             # for si, lp_pred in enumerate(lp_outs):  # per image
             #     for i, lpd_det in enumerate(lp_pred):  # detections per image
@@ -264,9 +264,6 @@ def run(data,
             #         lp_im0 = im0[lp_bbox[1]:lp_bbox[3], lp_bbox[0]:lp_bbox[2]]
             #         cv2.imshow('image', lp_im0)
             #         cv2.waitKey(0)
-
-            # NMS
-            out = lp_outs
 
         if cropped:
             names_copy = names
