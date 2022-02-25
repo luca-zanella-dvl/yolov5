@@ -29,7 +29,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
 from utils.datasets import create_dataloader
-from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
+from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml, clip_coords,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, scale_coords_inv, xywh2xyxy, xyxy2xywh)
 from utils.metrics import ConfusionMatrix, ap_per_class
@@ -217,17 +217,17 @@ def run(data,
         if cropped:
             lp_outs = []
             # Process predictions
-            k = 0
             for si, pred in enumerate(out):  # per image
                 lp_preds = []
                 path, shape = Path(paths[si]), shapes[si][0]
-                im0 = cv2.imread(str(path))
                 if len(pred):
                     for *xyxy, conf, cls in reversed(pred):  # per detection
                         c = int(cls)
                         label = names[c]
                         if label in VEHICLES:
-                            veh_xyxy = torch.tensor(xyxy).view(1, 4).clone().view(-1).numpy().astype(np.int32)
+                            veh_xyxy = torch.tensor(xyxy).view(1, 4).clone()
+                            clip_coords(veh_xyxy, (height, width))
+                            veh_xyxy = veh_xyxy.view(-1).numpy().astype(np.int32)
                             veh_im = im[si, :, veh_xyxy[1]:veh_xyxy[3],veh_xyxy[0]:veh_xyxy[2]]
                             veh_im = veh_im.permute(1, 2, 0)
                             # Padded resize
@@ -314,7 +314,8 @@ def run(data,
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(im, output_to_target(out), paths, f, names), daemon=True).start()
 
-        names = names_copy
+        if cropped:
+            names = names_copy
 
     if cropped:
         names = lpd_names
