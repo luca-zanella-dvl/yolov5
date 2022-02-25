@@ -242,7 +242,7 @@ def run(data,
                                 veh_img = veh_img[None]  # expand for batch dim
                             # (center x, center y, width, height, obj_conf, cls_conf)
                             lp_out, _ = lpd_model(veh_img) if training else lpd_model(veh_img, augment=augment, val=True)  # inference, loss outputs
-                            for si, lp_pred in enumerate(lp_out):  # per image
+                            for lp_pred in lp_out:  # per image
                                 # Process predictions
                                 lp_pred[:, :4] = xywh2xyxy(lp_pred[:, :4])
                                 lp_pred[:, :4] = scale_coords(veh_img.shape[2:], lp_pred[:, :4], veh_im.shape)
