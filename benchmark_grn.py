@@ -231,10 +231,10 @@ def run(data,
                             clip_coords(veh_xyxy, im[si].shape[1:])
 
                             veh_xyxy_im0 = scale_coords(im[si].shape[1:], veh_xyxy.clone(), shape, shapes[si][1])
-                            veh_xyxy_im0 = veh_xyxy_im0.view(-1)
-                            veh_im0 = im0[int(veh_xyxy_im0[1]):int(veh_xyxy_im0[3]), int(veh_xyxy_im0[0]):int(veh_xyxy_im0[2])]
+                            veh_xyxy_im0 = veh_xyxy_im0.view(-1).numpy().round().astype(np.int32)
+                            veh_im0 = im0[veh_xyxy_im0[1]:veh_xyxy_im0[3], veh_xyxy_im0[0]:veh_xyxy_im0[2]]
 
-                            veh_xyxy = veh_xyxy.view(-1).numpy().astype(np.int32)
+                            veh_xyxy = veh_xyxy.view(-1).numpy().round().astype(np.int32)
                             veh_im = im[si, :, veh_xyxy[1]:veh_xyxy[3], veh_xyxy[0]:veh_xyxy[2]]
                             veh_im = veh_im.permute(1, 2, 0)
 
