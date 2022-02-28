@@ -173,6 +173,7 @@ def run(data,
         if cropped:
             lpd_model.warmup(imgsz=(1, 3, lpd_imgsz, lpd_imgsz), half=lpd_half)  # warmup
         pad = 0.0 if task == 'speed' else 0.5
+        lpd_pad = 0.0 if task == 'speed' else 0.5
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         dataloader = create_dataloader(data[task], imgsz, batch_size, stride, single_cls, pad=pad, rect=pt,
                                        workers=workers, prefix=colorstr(f'{task}: '))[0]
@@ -220,26 +221,34 @@ def run(data,
             for si, pred in enumerate(out):  # per image
                 lp_preds = []
                 path, shape = Path(paths[si]), shapes[si][0]
+                im0 = cv2.imread(str(path))
                 if len(pred):
                     for *xyxy, conf, cls in reversed(pred):  # per detection
                         c = int(cls)
                         label = names[c]
                         if label in VEHICLES:
-                            veh_xyxy = torch.tensor(xyxy).view(1, 4).clone()
-                            clip_coords(veh_xyxy, (height, width))
+                            veh_xyxy = torch.tensor(xyxy).view(1, 4)
+                            clip_coords(veh_xyxy, im[si].shape[1:])
+
+                            veh_xyxy_im0 = scale_coords(im[si].shape[1:], veh_xyxy.clone(), shape, shapes[si][1])
+                            veh_xyxy_im0 = veh_xyxy_im0.view(-1)
+                            veh_im0 = im0[int(veh_xyxy_im0[1]):int(veh_xyxy_im0[3]), int(veh_xyxy_im0[0]):int(veh_xyxy_im0[2])]
+
                             veh_xyxy = veh_xyxy.view(-1).numpy().astype(np.int32)
-                            veh_im = im[si, :, veh_xyxy[1]:veh_xyxy[3],veh_xyxy[0]:veh_xyxy[2]]
+                            veh_im = im[si, :, veh_xyxy[1]:veh_xyxy[3], veh_xyxy[0]:veh_xyxy[2]]
                             veh_im = veh_im.permute(1, 2, 0)
+
                             # Padded resize
-                            veh_img = letterbox(veh_im.cpu().detach().numpy(), lpd_imgsz, stride=lpd_stride, auto=True)[0]
+                            veh_img = letterbox(veh_im0, lpd_imgsz, stride=lpd_stride, auto=lpd_pt)[0]
                             # Convert
-                            veh_img = veh_img.transpose((2, 0, 1))  # HWC to CHW
-                            veh_img = np.ascontiguousarray(veh_img) 
+                            veh_img = veh_img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                            veh_img = np.ascontiguousarray(veh_img)
                             veh_img = torch.from_numpy(veh_img).to(device)
                             veh_img = veh_img.half() if half else veh_img.float()  # uint8 to fp16/32
-                            
+                            veh_img /= 255  # 0 - 255 to 0.0 - 1.0
                             if len(veh_img.shape) == 3:
                                 veh_img = veh_img[None]  # expand for batch dim
+
                             # (center x, center y, width, height, obj_conf, cls_conf)
                             lp_out, _ = lpd_model(veh_img) if training else lpd_model(veh_img, augment=augment, val=True)  # inference, loss outputs
                             for lp_pred in lp_out:  # per image
@@ -257,13 +266,6 @@ def run(data,
                 lp_outs.append(lp_out)
 
             out = lp_outs
-
-            # for si, lp_pred in enumerate(lp_outs):  # per image
-            #     for i, lpd_det in enumerate(lp_pred):  # detections per image
-            #         lp_bbox = (lpd_det[:4].view(1, 4)).view(-1).cpu().numpy().astype(np.int32)
-            #         lp_im0 = im0[lp_bbox[1]:lp_bbox[3], lp_bbox[0]:lp_bbox[2]]
-            #         cv2.imshow('image', lp_im0)
-            #         cv2.waitKey(0)
 
         if cropped:
             names_copy = names
