@@ -145,6 +145,9 @@ class Model(nn.Module):
         img_size = x.shape[-2:]  # height, width
         s = [1, 0.83, 0.67]  # scales
         f = [None, 3, None]  # flips (2-ud, 3-lr)
+        # TPH-YOLOv5
+        # s = [1, 1, 0.83, 0.83, 0.67, 0.67]  # scales
+        # f = [None, 3, None, 3, None, 3]  # flips (2-ud, 3-lr)
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
@@ -318,11 +321,11 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
-        # np = sum([x.numel() for x in m_.parameters()])  # number params
-        # m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
-        # LOGGER.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n_, t, args))  # print
-        LOGGER.info('%3s%18s%3s  %-40s%-30s' % (i, f, n_, t, args))  # print
+        np = sum([x.numel() for x in m_.parameters()])  # number params
+        m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
+        # m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
+        LOGGER.info(f'{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}')  # print
+        # LOGGER.info('%3s%18s%3s  %-40s%-30s' % (i, f, n_, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
