@@ -315,7 +315,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
         optimizer.zero_grad()
-        for i, ((imgs_s, targets_s, paths_s, _), (imgs_t, paths_t, _)) in pbar:  # batch -------------------------------------------------------------
+        for i, ((imgs_s, targets_s, paths_s, _, sep_targets_s), (imgs_t, paths_t, _)) in pbar:  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = torch.cat([imgs_s, imgs_t])
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
@@ -356,10 +356,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 
                 domain_loss, domain_loss_items, domain_accuracy_items = compute_domain_loss(
                     domain_pred_s, domain_pred_t
-                )  # loss scaled by batch_size
+                )  # loss NOT scaled by batch_size
 
                 attn_loss = compute_attn_loss(
-                    attn_s, targets_s.to(device)
+                    attn_s, sep_targets_s
                 ) # loss NOT scaled by batch_size
 
                 if RANK != -1:

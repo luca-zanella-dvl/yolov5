@@ -290,6 +290,7 @@ class ComputeAttentionLoss:
     # Compute attention losses
     def __init__(self, model):
         h = model.hyp  # hyperparameters
+        self.device = next(model.parameters()).device  # get model device
 
         # Define criteria
         BCE = nn.BCELoss()
@@ -300,58 +301,61 @@ class ComputeAttentionLoss:
         for k in 'na', 'nl', 'anchors':
             setattr(self, k, getattr(det, k))
 
-    def __call__(self, attn_maps, targets):  # objectness maps, targets
-        device = targets.device
-        lattn = torch.zeros(1, device=device)
-        tattn = self.build_targets(attn_maps, targets)  # targets
+    def __call__(self, attn_maps, sep_targets):  # objectness maps, targets
+        lattn = torch.zeros(1, device=self.device)
+        tattn = self.build_targets(attn_maps, sep_targets)  # targets
 
         # Losses
         for i, attn_map in enumerate(attn_maps):
-            lattn += self.BCE(attn_map, tattn[i])
+            lattn += self.BCE(attn_map.to("cpu"), tattn[i].to("cpu"))
 
         # lattn *= self.hyp['attn']
         # bs = ...  # batch size
 
         # return lattn * bs, lattn.detach()
 
-        return lattn
+        return lattn*0.001
 
-    def build_targets(self, attn_maps, targets):
-        # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-        na, nt = self.na, targets.shape[0]  # number of anchors, targets
-        tattns = []
-        gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
-        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+    def build_targets(self, attn_maps, sep_targets):
+        tattns = [torch.zeros([0]).to(self.device) for _ in range(len(attn_maps))]
 
-        for i in range(self.nl):
-            anchors = self.anchors[i]
-            h, w = attn_maps[i].shape[1:]
-            gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
+        for targets in sep_targets:
+            targets = targets.to(self.device)
+            # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
+            na, nt = self.na, targets.shape[0]  # number of anchors, targets
+            gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
+            ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+            targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
-            # Match targets to anchors
-            t = targets * gain
-            if nt:
-                # Matches
-                r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
-                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
-                # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
-                t = t[j]  # filter
-                t = torch.unique(t[:, 2:6], dim=0)  # filter
+            for i in range(self.nl):
+                h, w = attn_maps[i].shape[1:]
+                attn_mask = torch.zeros((h, w)).to(self.device)
+                anchors = self.anchors[i]
+                gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
 
-            # Define
-            attn_mask = torch.zeros((h, w))
-            tbox = xywh2xyxy(t)
-            clip_coords(tbox, (h, w))
-            for xyxy in tbox:
-                left = xyxy[0].round().int()
-                top = xyxy[1].round().int()
-                right = xyxy[2].round().int()
-                bottom = xyxy[3].round().int()
-                attn_mask[top:(bottom+1), left:(right+1)] = 1
+                # Match targets to anchors
+                t = targets * gain
+                if nt:
+                    # Matches
+                    r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
+                    j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
+                    # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
+                    t = t[j]  # filter
+                    t = torch.unique(t[:, 2:6], dim=0)  # filter
 
-            # Append
-            tattns.append(attn_mask)
+                    if len(t):
+                        # Define
+                        tbox = xywh2xyxy(t)
+                        clip_coords(tbox, (h, w))
+                        for xyxy in tbox:
+                            left = xyxy[0].round().int()
+                            top = xyxy[1].round().int()
+                            right = xyxy[2].round().int()
+                            bottom = xyxy[3].round().int()
+                            attn_mask[top:(bottom+1), left:(right+1)] = 1
+
+                # Append
+                tattns[i] = torch.cat((tattns[i], torch.unsqueeze(attn_mask, dim=0)), dim=0)
 
         return tattns
 
