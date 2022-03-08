@@ -111,19 +111,29 @@ class CBAM(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
+    # Transformer layer https://arxiv.org/abs/2010.11929
     def __init__(self, c, num_heads):
         super().__init__()
+        self.ln1 = nn.LayerNorm(c)
         self.q = nn.Linear(c, c, bias=False)
         self.k = nn.Linear(c, c, bias=False)
         self.v = nn.Linear(c, c, bias=False)
         self.ma = nn.MultiheadAttention(embed_dim=c, num_heads=num_heads)
-        self.fc1 = nn.Linear(c, c, bias=False)
-        self.fc2 = nn.Linear(c, c, bias=False)
+        # self.fc1 = nn.Linear(c, c, bias=False)
+        # self.fc2 = nn.Linear(c, c, bias=False)
+        self.ln2 = nn.LayerNorm(c)
+        self.fc1 = nn.Linear(c, 4*c, bias=False)
+        self.fc2 = nn.Linear(4*c, c, bias=False)
+        self.dropout = nn.Dropout(0.1)
+        self.act = nn.ReLU(True)
+
 
     def forward(self, x):
-        x = self.ma(self.q(x), self.k(x), self.v(x))[0] + x
-        x = self.fc2(self.fc1(x)) + x
+        x_ = self.ln1(x)
+        x = self.dropout(self.ma(self.q(x_), self.k(x_), self.v(x_))[0]) + x
+        x_ = self.ln2(x)
+        x_ = self.fc2(self.dropout(self.act(self.fc1(x_))))
+        x = x + self.dropout(x_)
         return x
 
 
@@ -881,20 +891,20 @@ class C3x(C3):
         self.m = nn.Sequential(*(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)))
 
 
-# class C3TR(C3):
-#     # C3 module with TransformerBlock()
-#     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-#         super().__init__(c1, c2, n, shortcut, g, e)
-#         c_ = int(c2 * e)
-#         self.m = TransformerBlock(c_, c_, 4, n)
-
-
 class C3TR(C3):
-    # C3 module with Transformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
+    # C3 module with TransformerBlock()
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
-        self.m = Transformer(c_, c_, num_heads, num_layers)
+        self.m = TransformerBlock(c_, c_, 4, n)
+
+
+# class C3TR(C3):
+#     # C3 module with Transformer()
+#     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=8, num_layers=6):
+#         super().__init__(c1, c2, n, shortcut, g, e)
+#         c_ = int(c2 * e)
+#         self.m = Transformer(c_, c_, num_heads, num_layers)
 
 
 class C3DETRTR(C3):
