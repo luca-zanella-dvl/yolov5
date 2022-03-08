@@ -844,8 +844,7 @@ class DiscriminatorConv(nn.Module):
                     torch.nn.init.constant_(l.bias, 0)
     
     def forward(self, x, epoch):
-        if epoch > 2:
-            x = self.rev(x)
+        x = self.rev(x)
         
         x = self.dis_tower(x)
         x = self.cls_logits(x)
