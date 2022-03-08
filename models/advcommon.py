@@ -939,7 +939,7 @@ class C3(nn.Module):
 
 class C3TR(nn.Module):
     # C3 module with Transformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=2, num_layers=6):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=4, num_layers=6):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -960,7 +960,7 @@ class C3TR(nn.Module):
 
 class C3DETRTR(nn.Module):
     # C3 module with DETRTransformer()
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=2, num_layers=6):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, num_heads=4, num_layers=6):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
