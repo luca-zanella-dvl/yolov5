@@ -45,7 +45,7 @@ from utils.general import (LOGGER, check_dataset, check_file, check_git_status, 
                            print_args, print_mutation, strip_optimizer)
 from utils.loggers import Loggers
 from utils.loggers.wandb.wandb_utils import check_wandb_resume
-from utils.loss import ComputeLoss, ComputeDomainLoss
+from utils.loss import ComputeAttentionLoss, ComputeLoss, ComputeDomainLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
@@ -280,7 +280,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
-    compute_domain_loss = ComputeDomainLoss(model) # init domain loss class
+    compute_domain_loss = ComputeDomainLoss(model)  # init domain loss class
+    compute_attn_loss = ComputeAttentionLoss(model)  # init attention loss class
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader_s.num_workers + train_loader_t.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
@@ -342,11 +343,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             with amp.autocast(enabled=cuda):
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
-
-                pred_s, domain_pred_s = model(
+                pred_s, domain_pred_s, attn_s = model(
                     imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0, epoch=epoch
                 )  # forward
-                pred_t, domain_pred_t = model(
+                pred_t, domain_pred_t, _ = model(
                     imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
                 )  # forward
 
@@ -358,12 +358,17 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     domain_pred_s, domain_pred_t
                 )  # loss scaled by batch_size
 
+                attn_loss = compute_attn_loss(
+                    attn_s, targets_s.to(device)
+                ) # loss NOT scaled by batch_size
+
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                    domain_loss *= WORLD_SIZE
+                    domain_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    attn_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.
-            total_loss = loss + domain_loss
+            total_loss = loss + domain_loss + attn_loss
 
             # Backward
             scaler.scale(total_loss).backward()
