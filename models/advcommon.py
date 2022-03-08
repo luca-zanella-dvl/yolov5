@@ -406,7 +406,9 @@ class Transformer(nn.Module):
         self.conv = None
         if num_channels != d_model:
             self.conv = Conv(num_channels, d_model, 1, 1)  # NxCxHxW to NxDxHxW
-        self.pos_embed = nn.Linear(d_model, d_model)  # learnable position embedding
+        # self.pos_embed = nn.Linear(d_model, d_model)  # learnable position embedding
+        N_steps = d_model // 2
+        self.pos_embed = PositionEmbeddingLearned(N_steps)
         encoder_layer = TransformerEncoderLayer(
             d_model, num_heads, dim_feedforward, dropout, activation
         )
@@ -429,7 +431,8 @@ class Transformer(nn.Module):
             src = self.conv(src)
         # flatten NxDxHxW to HWxNxD
         src = src.flatten(2).permute(2, 0, 1)
-        src = src + self.pos_embed(src)
+        pos_embed = self.pos_embed(src).flatten(2).permute(2, 0, 1)
+        src = src + pos_embed
 
         memory, attn_output_weights = self.encoder(src)  # G'_s, A'_s
         # 1. take the maximum of A'_s in the second dimension
