@@ -156,7 +156,7 @@ class Model(nn.Module):
         return torch.cat(y, 1), None  # augmented inference, train
 
     def _forward_once(self, x, profile=False, visualize=False, gamma=0., validation=False, domain=None, epoch=3):
-        y, dt, dis_out = [], [], [] # outputs
+        y, dt, dis_out, obj_maps = [], [], [], [] # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
@@ -175,6 +175,7 @@ class Model(nn.Module):
                     dis_out.append(m(weigh_feat_map, epoch))
             elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR', 'C3SwinTR', 'C3STR']]):
                 x, obj_map = m(x, domain)  # run
+                obj_maps.append(obj_map)
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
                 x = m(x, domain)  # run
             else:
@@ -182,7 +183,7 @@ class Model(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x if not dis_out else (x, dis_out)
+        return x if not dis_out else (x, dis_out, obj_maps)
 
     def _descale_pred(self, p, flips, scale, img_size):
         # de-scale predictions following augmented inference (inverse operation)
