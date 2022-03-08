@@ -274,3 +274,69 @@ class ComputeDomainLoss:
         num_samples = torch.prod(torch.tensor(predictions.shape))
         accuracy = float(num_correct)/float(num_samples)*100
         return torch.tensor([accuracy]).to(scores.device)
+
+
+class ComputeAttentionLoss:
+    # Compute attention losses
+    def __init__(self, model):
+        h = model.hyp  # hyperparameters
+
+        # Define criteria
+        BCE = nn.BCELoss()
+        self.BCE, self.hyp = BCE, h 
+
+        det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
+        for k in 'na', 'nl', 'anchors':
+            setattr(self, k, getattr(det, k))
+
+    def __call__(self, attn_maps, targets):  # predictions, targets
+        device = targets.device
+        l_attn = [torch.zeros(1, device=device) for _ in range(len(attn_maps))]
+        t_attn = self.build_targets(attn_maps, targets)  # targets
+
+        # Losses and accuracies
+        for i in range(len(attn_maps)):
+            l_attn[i] += self.BCE(attn_maps[i], t_attn[i])
+
+        return sum(l_attn)
+
+    def build_targets(self, attn_maps, targets):
+        # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
+        na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
+        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+        labels = torch.empty(0, 4)
+        targets_attn = []
+
+        for i in range(self.nl):
+            anchors = self.anchors[i]
+            gain[2:6] = attn_maps[i].shape[0]  # xyxy gain
+
+            # Match targets to anchors
+            t = targets * gain
+            if nt:
+                # Matches
+                r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
+                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
+                # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
+                t = t[j]  # filter
+
+                labels = torch.unique(t[:,2:6], dim=0) / gain[2:6]
+
+            attn_mask = torch.zeros(attn_maps[i].shape)
+            dh, dw = attn_mask.shape
+
+            for label in labels:
+                x, y, w, h = label
+
+                left = int(torch.round((x - w / 2) * dw))
+                right = int(torch.round((x + w / 2) * dw))
+                top = int(torch.round((y - h / 2) * dh))
+                bottom = int(torch.round((y + h / 2) * dh))
+
+                attn_mask[top:bottom+1, left:right+1] = 1.
+
+            targets_attn.append(attn_mask)
+
+        return targets_attn
