@@ -100,6 +100,8 @@ class ComputeLoss:
 
     # Compute losses
     def __init__(self, model, autobalance=False):
+        self.sort_obj_iou = False
+        # self.sort_obj_iou = True  # TPH-YOLOv5
         device = next(model.parameters()).device  # get model device
         h = model.hyp  # hyperparameters
 
@@ -260,12 +262,13 @@ class ComputeDomainLoss:
         # Losses and accuracies
         for i in range(len(sp)):
             losses[i] += self.BCE(torch.cat((sp[i], tp[i])), targets[i].to(device))
-            losses[i] *= self.hyp['domain']
+            # losses[i] *= self.hyp['domain']
             accuracies[i] = self.compute_accuracies(torch.cat((sp[i], tp[i])), targets[i].to(device))
-            
-        bs = sp[0].shape[0] * 2  # batch size
 
-        return sum(losses) * bs, torch.cat(losses).detach(), torch.cat(accuracies).detach()
+        # bs = sp[0].shape[0] * 2  # batch size
+
+        # return sum(losses) * bs, torch.cat(losses).detach(), torch.cat(accuracies).detach()
+        return sum(losses)/3., torch.cat(losses).detach(), torch.cat(accuracies).detach()
 
     def build_targets(self, sp, tp):
         # Build targets for compute_domain_loss()
