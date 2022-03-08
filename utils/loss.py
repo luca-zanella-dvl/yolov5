@@ -300,7 +300,7 @@ class ComputeAttentionLoss:
     def __call__(self, attn_maps, targets):  # objectness maps, targets
         device = targets.device
         lattn = torch.zeros(1, device=device)
-        tattn = self.build_COCO_targets(attn_maps, targets)  # targets
+        tattn = self.build_targets(attn_maps, targets)  # targets
 
         # Losses
         for i, attn_map in enumerate(attn_maps):
@@ -323,7 +323,7 @@ class ComputeAttentionLoss:
 
         for i in range(self.nl):
             anchors = self.anchors[i]
-            h, w = attn_maps[i].shape[:2]
+            h, w = attn_maps[i].shape[1:]
             gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
 
             # Match targets to anchors
@@ -334,6 +334,7 @@ class ComputeAttentionLoss:
                 j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[j]  # filter
+                t = torch.unique(t[:, 2:6], dim=0)  # filter
 
             # Define
             attn_mask = torch.zeros((h, w))
@@ -344,7 +345,7 @@ class ComputeAttentionLoss:
                 top = xyxy[1].round().int()
                 right = xyxy[2].round().int()
                 bottom = xyxy[3].round().int()
-                attn_mask[top:bottom, left:right] = 1
+                attn_mask[top:(bottom+1), left:(right+1)] = 1
 
             # Append
             tattns.append(attn_mask)
@@ -372,7 +373,7 @@ class ComputeAttentionLoss:
         gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
 
         for i in range(self.nl):
-            h, w = attn_maps[i].shape[:2]
+            h, w = attn_maps[i].shape[1:]
             gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
 
             # Match targets to anchors
