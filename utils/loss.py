@@ -6,8 +6,15 @@ Loss functions
 import torch
 import torch.nn as nn
 
+from utils.general import clip_coords, xywh2xyxy
 from utils.metrics import bbox_iou
 from utils.torch_utils import de_parallel
+
+
+COCO_IMG_W = 640
+COCO_IMG_H = 480
+COCO_SMALL_T = 32
+COCO_MEDIUM_T = 96
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
@@ -283,35 +290,41 @@ class ComputeAttentionLoss:
 
         # Define criteria
         BCE = nn.BCELoss()
+
         self.BCE, self.hyp = BCE, h 
 
         det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
         for k in 'na', 'nl', 'anchors':
             setattr(self, k, getattr(det, k))
 
-    def __call__(self, attn_maps, targets):  # predictions, targets
+    def __call__(self, attn_maps, targets):  # objectness maps, targets
         device = targets.device
-        l_attn = [torch.zeros(1, device=device) for _ in range(len(attn_maps))]
-        t_attn = self.build_targets(attn_maps, targets)  # targets
+        lattn = torch.zeros(1, device=device)
+        tattn = self.build_COCO_targets(attn_maps, targets)  # targets
 
-        # Losses and accuracies
-        for i in range(len(attn_maps)):
-            l_attn[i] += self.BCE(attn_maps[i], t_attn[i])
+        # Losses
+        for i, attn_map in enumerate(attn_maps):
+            lattn += self.BCE(attn_map, tattn[i])
 
-        return sum(l_attn)
+        # lattn *= self.hyp['attn']
+        # bs = ...  # batch size
+
+        # return lattn * bs, lattn.detach()
+
+        return lattn
 
     def build_targets(self, attn_maps, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        tattns = []
         gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
         ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
-        labels = torch.empty(0, 4)
-        targets_attn = []
 
         for i in range(self.nl):
             anchors = self.anchors[i]
-            gain[2:6] = attn_maps[i].shape[0]  # xyxy gain
+            h, w = attn_maps[i].shape[:2]
+            gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
 
             # Match targets to anchors
             t = targets * gain
@@ -322,21 +335,66 @@ class ComputeAttentionLoss:
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[j]  # filter
 
-                labels = torch.unique(t[:,2:6], dim=0) / gain[2:6]
+            # Define
+            attn_mask = torch.zeros((h, w))
+            tbox = xywh2xyxy(t)
+            clip_coords(tbox, (h, w))
+            for xyxy in tbox:
+                left = xyxy[0].round().int()
+                top = xyxy[1].round().int()
+                right = xyxy[2].round().int()
+                bottom = xyxy[3].round().int()
+                attn_mask[top:bottom, left:right] = 1
 
-            attn_mask = torch.zeros(attn_maps[i].shape)
-            dh, dw = attn_mask.shape
+            # Append
+            tattns.append(attn_mask)
 
-            for label in labels:
-                x, y, w, h = label
+        return tattns
 
-                left = int(torch.round((x - w / 2) * dw))
-                right = int(torch.round((x + w / 2) * dw))
-                top = int(torch.round((y - h / 2) * dh))
-                bottom = int(torch.round((y + h / 2) * dh))
+    def build_COCO_targets(self, attn_maps, targets):
+        # Build binary mask for compute_loss(), input targets(image,class,x,y,w,h)
+        small_t = (COCO_SMALL_T / COCO_IMG_W) * (COCO_SMALL_T / COCO_IMG_H)
+        medium_t = (COCO_MEDIUM_T / COCO_IMG_W) * (COCO_MEDIUM_T / COCO_IMG_H)
+        
+        small_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
+        medium_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
+        large_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
 
-                attn_mask[top:bottom+1, left:right+1] = 1.
+        # Define
+        box_area = targets[:, 4] * targets[:, 5]
+        small_mask = small_mask.add((box_area < small_t))
+        medium_mask = medium_mask.add((box_area > small_t) & (box_area < medium_t))
+        large_mask = large_mask.add((box_area > medium_t))
+        masks = [small_mask, medium_mask, large_mask]
+        
+        nt = targets.shape[0]  # number of targets
+        tattns = []
+        gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
 
-            targets_attn.append(attn_mask)
+        for i in range(self.nl):
+            h, w = attn_maps[i].shape[:2]
+            gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
 
-        return targets_attn
+            # Match targets to anchors
+            t = targets * gain
+            if nt:
+                # Matches
+                t = t[masks[i]]
+            else:
+                t = targets[0]
+
+            # Define
+            attn_mask = torch.zeros((h, w))
+            tbox = xywh2xyxy(t)
+            clip_coords(tbox, (h, w))
+            for xyxy in tbox:
+                left = xyxy[0].round().int()
+                top = xyxy[1].round().int()
+                right = xyxy[2].round().int()
+                bottom = xyxy[3].round().int()
+                attn_mask[top:bottom, left:right] = 1
+
+            # Append
+            tattns.append(attn_mask)
+
+        return tattns
