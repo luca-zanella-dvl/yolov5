@@ -344,10 +344,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 r = ni / max_iterations
                 gamma = 2 / (1 + math.exp(-delta * r)) - 1
                 pred_s, domain_pred_s, attn_s = model(
-                    imgs[: batch_size // 2 // WORLD_SIZE], gamma=gamma, domain=0, epoch=epoch
+                    imgs[: imgs_s.shape[0] // WORLD_SIZE], gamma=gamma, domain=0, epoch=epoch
                 )  # forward
                 pred_t, domain_pred_t, _ = model(
-                    imgs[batch_size // 2 // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
+                    imgs[imgs_s.shape[0] // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
                 )  # forward
 
                 loss, loss_items = compute_loss(
@@ -364,8 +364,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                    domain_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                    attn_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    # domain_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                    # attn_loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.
             total_loss = loss + domain_loss + attn_loss
