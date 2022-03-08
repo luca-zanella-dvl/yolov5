@@ -477,9 +477,9 @@ class TransformerEncoderLayer(nn.Module):
     ):
         super().__init__()
         # self.q = nn.Conv2d(c, d_model, kernel_size=1)
-        self.q = nn.Linear(d_model, d_model, bias=False)
-        self.k = nn.Linear(d_model, d_model, bias=False)
-        self.v = nn.Linear(d_model, d_model, bias=False)
+        # self.q = nn.Linear(d_model, d_model, bias=False)
+        # self.k = nn.Linear(d_model, d_model, bias=False)
+        # self.v = nn.Linear(d_model, d_model, bias=False)
 
         self.self_attn = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, dropout=dropout)
         # Implementation of Feedforward model
@@ -503,9 +503,10 @@ class TransformerEncoderLayer(nn.Module):
         # q H_sW_sxD
         # k H_sW_sxD
         # v H_sW_sxD
-        q = self.q(src)  # encoder input
-        k = self.k(src)  # encoder input
-        v = self.v(src)  # encoder input
+        # q = self.q(src)  # encoder input
+        # k = self.k(src)  # encoder input
+        # v = self.v(src)  # encoder input
+        q = k = v = src
         # G'_s, A'_s
         attn_output, attn_output_weights = self.self_attn(
             q, k, value=v, attn_mask=src_mask, key_padding_mask=src_key_padding_mask
