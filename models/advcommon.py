@@ -246,10 +246,7 @@ class DETRTransformer(nn.Module):
         normalize_before=False
         ):
         super().__init__()
-        self.conv = None
-        if num_channels != d_model:
-            # NxCxHxW to NxDxHxW
-            self.conv = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding 
+        self.input_proj = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding
         N_steps = d_model // 2
         self.pos_embed = PositionEmbeddingLearned(N_steps)
         encoder_layer = DETRTransformerEncoderLayer(
@@ -271,6 +268,7 @@ class DETRTransformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, src, mask=None):  # F_{s} NxDxHxW
+        src = self.input_proj(src)
         # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
         pos_embed = self.pos_embed(src).flatten(2).permute(2, 0, 1)
