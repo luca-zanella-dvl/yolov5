@@ -303,6 +303,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         mloss = torch.zeros(3, device=device)  # mean losses
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
+        mattnloss = torch.zeros(1, device=device) # mean attention losse
         if RANK != -1:
             train_loader_s.sampler.set_epoch(epoch)
             train_loader_t.sampler.set_epoch(epoch)
@@ -358,7 +359,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     domain_pred_s, domain_pred_t
                 )  # loss NOT scaled by batch_size
 
-                attn_loss = compute_attn_loss(
+                attn_loss, attn_loss_item = compute_attn_loss(
                     attn_s, sep_targets_s
                 ) # loss NOT scaled by batch_size
 
@@ -387,9 +388,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
                 madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
+                mattnloss = (mattnloss * i + attn_loss_item) / (i + 1)  # update mean attention loss
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 12) % (
-                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *madvaccuracy, attn_loss, targets_s.shape[0], imgs.shape[-1]))
+                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *madvaccuracy, mattnloss, targets_s.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs_s.float().to(device), targets_s, paths_s, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 
@@ -418,7 +420,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy) + list(attn_loss)
+            log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy) + list(mattnloss)
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model

@@ -314,7 +314,7 @@ class ComputeAttentionLoss:
 
         # return lattn * bs, lattn.detach()
 
-        return lattn*0.001
+        return lattn*0.001, lattn.detach()
 
     def build_targets(self, attn_maps, sep_targets):
         tattns = [torch.zeros([0]).to(self.device) for _ in range(len(attn_maps))]
