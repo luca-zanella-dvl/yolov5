@@ -302,19 +302,19 @@ class ComputeAttentionLoss:
             setattr(self, k, getattr(det, k))
 
     def __call__(self, attn_maps, sep_targets):  # objectness maps, targets
-        lattn = torch.zeros(1, device=self.device)
+        lattn = [torch.zeros(1, device=self.device) for _ in range(len(attn_maps))]
         tattn = self.build_targets(attn_maps, sep_targets)  # targets
 
         # Losses
         for i, attn_map in enumerate(attn_maps):
-            lattn += self.BCE(attn_map.cpu(), tattn[i].cpu())
+            lattn[i] += self.BCE(attn_map.cpu(), tattn[i].cpu())
 
         # lattn *= self.hyp['attn']
         # bs = ...  # batch size
 
         # return lattn * bs, lattn.detach()
 
-        return lattn*0.001, lattn.detach()
+        return sum(lattn)*0.01, torch.cat(lattn).detach()
 
     def build_targets(self, attn_maps, sep_targets):
         tattns = [torch.zeros([0]).to(self.device) for _ in range(len(attn_maps))]

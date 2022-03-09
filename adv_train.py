@@ -303,15 +303,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         mloss = torch.zeros(3, device=device)  # mean losses
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
-        mattnloss = torch.zeros(1, device=device) # mean attention losse
+        mattnloss = torch.zeros(3, device=device) # mean attention losse
         if RANK != -1:
             train_loader_s.sampler.set_epoch(epoch)
             train_loader_t.sampler.set_epoch(epoch)
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader_s, train_loader_t))
         LOGGER.info(
-            ("\n" + "%10s" * 14)
-            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "l_attn", "labels", "img_size")
+            ("\n" + "%10s" * 13)
+            % ("Epoch", "gpu_mem", "box", "obj", "cls", "ldis_sm", "ldis_md", "ldis_lg", "lattn_sm", "lattn_md", "lattn_lg", "labels", "img_size")
         )
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -359,7 +359,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     domain_pred_s, domain_pred_t
                 )  # loss NOT scaled by batch_size
 
-                attn_loss, attn_loss_item = compute_attn_loss(
+                attn_loss, attn_loss_items = compute_attn_loss(
                     attn_s, sep_targets_s
                 ) # loss NOT scaled by batch_size
 
@@ -388,10 +388,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
                 madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
-                mattnloss = (mattnloss * i + attn_loss_item) / (i + 1)  # update mean attention loss
+                mattnloss = (mattnloss * i + attn_loss_items) / (i + 1)  # update mean attention loss
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%10s' * 2 + '%10.4g' * 12) % (
-                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *madvaccuracy, mattnloss, targets_s.shape[0], imgs.shape[-1]))
+                pbar.set_description(('%10s' * 2 + '%10.4g' * 11) % (
+                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *mattnloss, targets_s.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs_s.float().to(device), targets_s, paths_s, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 

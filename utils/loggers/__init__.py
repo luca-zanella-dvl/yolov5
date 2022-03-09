@@ -64,7 +64,7 @@ class Loggers():
         if adv:
             self.adv_keys = ['train_adv/domain_loss_small', 'train_adv/domain_loss_medium', 'train_adv/domain_loss_large', # adversarial train loss
                              'train_adv/domain_accuracy_small', 'train_adv/domain_accuracy_medium', 'train_adv/domain_accuracy_large', # adversarial train accuracy
-                             'train_adv/attention_loss'] # attention loss
+                             'train_adv/attn_loss_small', 'train_adv/attn_loss_medium', 'train_adv/attn_loss_large'] # attention loss
             self.keys += self.adv_keys
         self.best_keys = ['best/epoch', 'best/precision', 'best/recall', 'best/mAP_0.5', 'best/mAP_0.5:0.95']
         for k in LOGGERS:
