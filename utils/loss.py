@@ -307,7 +307,7 @@ class ComputeAttentionLoss:
 
         # Losses
         for i, attn_map in enumerate(attn_maps):
-            lattn += self.BCE(attn_map.to("cpu"), tattn[i].to("cpu"))
+            lattn += self.BCE(attn_map.cpu(), tattn[i].cpu())
 
         # lattn *= self.hyp['attn']
         # bs = ...  # batch size
