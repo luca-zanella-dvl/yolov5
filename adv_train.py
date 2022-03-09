@@ -309,8 +309,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         # pbar = enumerate(train_loader)
         pbar = enumerate(zip(train_loader_s, train_loader_t))
         LOGGER.info(
-            ("\n" + "%10s" * 13)
-            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "labels", "img_size")
+            ("\n" + "%10s" * 14)
+            % ("Epoch", "gpu_mem", "box", "obj", "cls", "l_small", "l_medium", "l_large", "a_small", "a_medium", "a_large", "l_attn", "labels", "img_size")
         )
         if RANK in [-1, 0]:
             pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -388,8 +388,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
                 madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%10s' * 2 + '%10.4g' * 11) % (
-                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *madvaccuracy, targets_s.shape[0], imgs.shape[-1]))
+                pbar.set_description(('%10s' * 2 + '%10.4g' * 12) % (
+                    f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *madvaccuracy, attn_loss, targets_s.shape[0], imgs.shape[-1]))
                 callbacks.run('on_train_batch_end', ni, model, imgs_s.float().to(device), targets_s, paths_s, plots, opt.sync_bn)
             # end batch ------------------------------------------------------------------------------------------------
 
@@ -418,7 +418,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy)
+            log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy) + list(attn_loss)
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
