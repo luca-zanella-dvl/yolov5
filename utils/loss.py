@@ -359,50 +359,53 @@ class ComputeAttentionLoss:
 
         return tattns
 
-    def build_COCO_targets(self, attn_maps, targets):
-        # Build binary mask for compute_loss(), input targets(image,class,x,y,w,h)
-        small_t = (COCO_SMALL_T / COCO_IMG_W) * (COCO_SMALL_T / COCO_IMG_H)
-        medium_t = (COCO_MEDIUM_T / COCO_IMG_W) * (COCO_MEDIUM_T / COCO_IMG_H)
-        
-        small_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
-        medium_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
-        large_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
+    def build_COCO_targets(self, attn_maps, sep_targets):
+        tattns = [torch.zeros([0]).to(self.device) for _ in range(len(attn_maps))]
 
-        # Define
-        box_area = targets[:, 4] * targets[:, 5]
-        small_mask = small_mask.add((box_area < small_t))
-        medium_mask = medium_mask.add((box_area > small_t) & (box_area < medium_t))
-        large_mask = large_mask.add((box_area > medium_t))
-        masks = [small_mask, medium_mask, large_mask]
-        
-        nt = targets.shape[0]  # number of targets
-        tattns = []
-        gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
-
-        for i in range(self.nl):
-            h, w = attn_maps[i].shape[1:]
-            gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
-
-            # Match targets to anchors
-            t = targets * gain
-            if nt:
-                # Matches
-                t = t[masks[i]]
-            else:
-                t = targets[0]
+        for targets in sep_targets:
+            targets = targets.to(self.device)
+            # Build binary mask for compute_loss(), input targets(image,class,x,y,w,h)
+            small_t = (COCO_SMALL_T / COCO_IMG_W) * (COCO_SMALL_T / COCO_IMG_H)
+            medium_t = (COCO_MEDIUM_T / COCO_IMG_W) * (COCO_MEDIUM_T / COCO_IMG_H)
+            
+            small_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
+            medium_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
+            large_mask = torch.zeros(targets.shape[0], device=targets.device, dtype=torch.bool)
 
             # Define
-            attn_mask = torch.zeros((h, w))
-            tbox = xywh2xyxy(t)
-            clip_coords(tbox, (h, w))
-            for xyxy in tbox:
-                left = xyxy[0].round().int()
-                top = xyxy[1].round().int()
-                right = xyxy[2].round().int()
-                bottom = xyxy[3].round().int()
-                attn_mask[top:bottom, left:right] = 1
+            box_area = targets[:, 4] * targets[:, 5]
+            small_mask = small_mask.add((box_area < small_t))
+            medium_mask = medium_mask.add((box_area > small_t) & (box_area < medium_t))
+            large_mask = large_mask.add((box_area > medium_t))
+            masks = [small_mask, medium_mask, large_mask]
+            
+            nt = targets.shape[0]  # number of targets
+            gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
 
-            # Append
-            tattns.append(attn_mask)
+            for i in range(self.nl):
+                h, w = attn_maps[i].shape[1:]
+                attn_mask = torch.zeros((h, w)).to(self.device)
+                gain[2:6] = torch.tensor([[w, h, w, h]])  # xyxy gain
+
+                # Match targets to anchors
+                t = targets * gain
+                if nt:
+                    # Matches
+                    t = t[masks[i]]
+                else:
+                    t = targets
+
+                # Define
+                tbox = xywh2xyxy(t[:, 2:6])
+                clip_coords(tbox, (h, w))
+                for xyxy in tbox:
+                    left = xyxy[0].round().int()
+                    top = xyxy[1].round().int()
+                    right = xyxy[2].round().int()
+                    bottom = xyxy[3].round().int()
+                    attn_mask[top:(bottom+1), left:(right+1)] = 1
+
+                # Append
+                tattns[i] = torch.cat((tattns[i], torch.unsqueeze(attn_mask, dim=0)), dim=0)
 
         return tattns
