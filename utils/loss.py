@@ -293,9 +293,9 @@ class ComputeAttentionLoss:
         self.device = next(model.parameters()).device  # get model device
 
         # Define criteria
-        BCE = nn.BCELoss()
+        Dice = DiceLoss()
 
-        self.BCE, self.hyp = BCE, h 
+        self.Dice, self.hyp = Dice, h 
 
         det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
         for k in 'na', 'nl', 'anchors':
@@ -307,14 +307,14 @@ class ComputeAttentionLoss:
 
         # Losses
         for i, attn_map in enumerate(attn_maps):
-            lattn[i] += self.BCE(attn_map.cpu(), tattn[i].cpu())
+            lattn[i] += self.Dice(attn_map, tattn[i])
 
         # lattn *= self.hyp['attn']
         # bs = ...  # batch size
 
         # return lattn * bs, lattn.detach()
 
-        return sum(lattn)*0.01, torch.cat(lattn).detach()
+        return sum(lattn)*0.05, torch.cat(lattn).detach()
 
     def build_targets(self, attn_maps, sep_targets):
         tattns = [torch.zeros([0]).to(self.device) for _ in range(len(attn_maps))]
@@ -409,3 +409,17 @@ class ComputeAttentionLoss:
                 tattns[i] = torch.cat((tattns[i], torch.unsqueeze(attn_mask, dim=0)), dim=0)
 
         return tattns
+
+
+class DiceLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(DiceLoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1):
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+        
+        intersection = (inputs * targets).sum()                            
+        dice = (2.*intersection + smooth)/(inputs.sum() + targets.sum() + smooth)  
+        
+        return 1 - dice
