@@ -143,6 +143,7 @@ class Model(nn.Module):
 
     def _forward_augment(self, x, gamma=0., validation=False, domain=None, epoch=3):
         img_size = x.shape[-2:]  # height, width
+        # YOLOv5
         s = [1, 0.83, 0.67]  # scales
         f = [None, 3, None]  # flips (2-ud, 3-lr)
         # TPH-YOLOv5
@@ -176,7 +177,7 @@ class Model(nn.Module):
                     obj_map = torch.repeat_interleave(obj_map, num_channels, dim=1)
                     weigh_feat_map = (1-gamma)*x + gamma*x*obj_map
                     dis_out.append(m(weigh_feat_map, epoch))
-            elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR', 'C3SwinTR', 'C3STR']]):
+            elif domain is not None and any([module in m.type for module in ['C3TR', 'C3DETRTR', 'CBAM', 'C3SwinTR', 'C3STR']]):
                 x, obj_map = m(x, domain)  # run
                 obj_maps.append(obj_map)
             elif domain is not None and any([module in m.type for module in ['Conv', 'C3', 'SPPF']]):
