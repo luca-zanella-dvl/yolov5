@@ -213,10 +213,7 @@ class DETRTransformer(nn.Module):
         normalize_before=False
         ):
         super().__init__()
-        self.conv = None
-        if num_channels != d_model:
-            # NxCxHxW to NxDxHxW
-            self.conv = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding 
+        self.input_proj = nn.Conv2d(num_channels, d_model, kernel_size=1)  # embedding
         N_steps = d_model // 2
         self.pos_embed = PositionEmbeddingLearned(N_steps)
         encoder_layer = DETRTransformerEncoderLayer(
@@ -238,6 +235,8 @@ class DETRTransformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, src, mask=None):  # F_{s} NxDxHxW
+        src = self.input_proj(src)
+        # flatten NxDxHxW to HWxNxD
         bs, c, h, w = src.shape
         pos_embed = self.pos_embed(src).flatten(2).permute(2, 0, 1)
         src = src.flatten(2).permute(2, 0, 1)
@@ -250,8 +249,9 @@ class DETRTransformer(nn.Module):
         # 2. reshape the resulting vector to H_s x W_s
         obj_map = torch.reshape(max_values, (bs, h, w))
         # 3. min-max normalize the resulting matrix to the [0, 1] range
-        obj_map = obj_map - obj_map.min(1, keepdim=True)[0]
-        obj_map = obj_map / obj_map.max(1, keepdim=True)[0]
+        obj_map_min = torch.min(obj_map)
+        obj_map_max = torch.max(obj_map)
+        obj_map = (obj_map - obj_map_min) / (obj_map_max - obj_map_min)
         obj_map = torch.nan_to_num(obj_map)
         return memory.permute(1, 2, 0).view(bs, c, h, w), obj_map  # G_s, A_s
 
