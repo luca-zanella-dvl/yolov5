@@ -117,6 +117,7 @@ def run(
         exist_ok=False,  # existing project/name ok, do not increment
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
+        rev_names=False,  # reverses elements of class names
         model=None,
         dataloader=None,
         save_dir=Path(''),
@@ -184,7 +185,9 @@ def run(
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
     names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}
+    names_rev = {k: v for k, v in zip(names.keys(), reversed(list(names.values())))}
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
+    # class_map = list(range(1, 1001)) # PASCAL VOC 
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     loss = torch.zeros(3, device=device)
@@ -232,6 +235,9 @@ def run(
                     stats.append((correct, *torch.zeros((3, 0), device=device)))
                 continue
 
+            if rev_names:
+                pred[:, 5] = torch.as_tensor([list(names.keys())[list(names.values())[::-1].index(names[pcls])] for pcls in pred[:, 5].tolist()])
+
             # Predictions
             if single_cls:
                 pred[:, 5] = 0
@@ -253,19 +259,29 @@ def run(
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / (path.stem + '.txt'))
             if save_json:
                 save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
-            callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
+            if rev_names:
+                callbacks.run('on_val_image_end', pred, predn, path, names_rev, im[si])
+            else:
+                callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
 
         # Plot images
         if plots and batch_i < 3:
-            plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
-            plot_images(im, output_to_target(out), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
+            if rev_names:
+                plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names_rev)  # labels
+                plot_images(im, output_to_target(out), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names_rev)  # pred
+            else:        
+                plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
+                plot_images(im, output_to_target(out), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
 
         callbacks.run('on_val_batch_end')
 
     # Compute metrics
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
-        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+        if rev_names:
+            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names_rev)
+        else:
+            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
         nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
@@ -279,7 +295,10 @@ def run(
     # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(ap_class):
-            LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
+            if rev_names:
+                LOGGER.info(pf % (names_rev[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
+            else:
+                LOGGER.info(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
 
     # Print speeds
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
@@ -289,7 +308,10 @@ def run(
 
     # Plots
     if plots:
-        confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
+        if rev_names:
+            confusion_matrix.plot(save_dir=save_dir, names=list(names_rev.values()))
+        else:
+            confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
         callbacks.run('on_val_end')
 
     # Save JSON
@@ -353,6 +375,7 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    parser.add_argument('--rev-names', action='store_true', help='reverses elements of class names')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
