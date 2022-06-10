@@ -303,7 +303,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         mloss = torch.zeros(3, device=device)  # mean losses
         madvloss = torch.zeros(3, device=device)  # mean adversarial losses
         madvaccuracy = torch.zeros(3, device=device)  # mean adversarial accuracies
-        mattnloss = torch.zeros(3, device=device) # mean attention losse
+        mattnloss = torch.zeros(3, device=device) # mean attention losses
+        # mattnloss_target = torch.zeros(3, device=device) # mean attention losses target
         if RANK != -1:
             train_loader_s.sampler.set_epoch(epoch)
             train_loader_t.sampler.set_epoch(epoch)
@@ -317,6 +318,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
         optimizer.zero_grad()
         for i, ((imgs_s, targets_s, paths_s, _, sep_targets_s), (imgs_t, paths_t, _)) in pbar:  # batch -------------------------------------------------------------
+        # for i, ((imgs_s, targets_s, paths_s, _, sep_targets_s), (imgs_t, _, _, _, sep_targets_t)) in pbar:
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = torch.cat([imgs_s, imgs_t])
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
@@ -350,6 +352,9 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 pred_t, domain_pred_t, _ = model(
                     imgs[imgs_s.shape[0] // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
                 )  # forward
+                # pred_t, domain_pred_t, attn_t = model(
+                #     imgs[imgs_s.shape[0] // WORLD_SIZE :], gamma=gamma, domain=1, epoch=epoch
+                # )  # forward
 
                 loss, loss_items = compute_loss(
                     pred_s, targets_s.to(device)
@@ -362,6 +367,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 attn_loss, attn_loss_items = compute_attn_loss(
                     attn_s, sep_targets_s
                 ) # loss NOT scaled by batch_size
+
+                # _, attn_loss_items_target = compute_attn_loss(
+                #     attn_t, sep_targets_t
+                # ) # loss NOT scaled by batch_size for TARGET
 
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
@@ -389,6 +398,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 madvloss = (madvloss * i + domain_loss_items) / (i + 1)  # update mean losses
                 madvaccuracy = (madvaccuracy * i + domain_accuracy_items) / (i + 1)  # update mean accuracies
                 mattnloss = (mattnloss * i + attn_loss_items) / (i + 1)  # update mean attention loss
+                # mattnloss_target = (mattnloss_target * i + attn_loss_items_target) / (i + 1)  # update mean attention loss
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 11) % (
                     f'{epoch}/{epochs - 1}', mem, *mloss, *madvloss, *mattnloss, targets_s.shape[0], imgs.shape[-1]))
@@ -421,6 +431,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             if fi > best_fitness:
                 best_fitness = fi
             log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy) + list(mattnloss)
+            # log_vals = list(mloss) + list(results) + lr + list(madvloss) + list(madvaccuracy) + list(mattnloss) + list(mattnloss_target)
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
